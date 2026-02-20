@@ -4,8 +4,8 @@
     {
       "type": "frame",
       "id": "qHhaj",
-      "x": 0,
-      "y": 3457,
+      "x": 68,
+      "y": 3385,
       "name": "Laputa App — Full Layout (Light)",
       "theme": {
         "Mode": "Light"
@@ -297,7 +297,7 @@
                               "id": "vRMH9",
                               "name": "trashTxt",
                               "fill": "$--foreground",
-                              "content": "Trash",
+                              "content": "Archive",
                               "fontFamily": "Inter",
                               "fontSize": 13,
                               "fontWeight": "500"
@@ -2202,26 +2202,6 @@
                                   "type": "text",
                                   "id": "pvTmc",
                                   "name": "dotSep",
-                                  "fill": "$--muted-foreground",
-                                  "content": "·",
-                                  "fontFamily": "Inter",
-                                  "fontSize": 12,
-                                  "fontWeight": "normal"
-                                },
-                                {
-                                  "type": "text",
-                                  "id": "wr3yb",
-                                  "name": "wordCount",
-                                  "fill": "$--muted-foreground",
-                                  "content": "1,284 words",
-                                  "fontFamily": "Inter",
-                                  "fontSize": 12,
-                                  "fontWeight": "normal"
-                                },
-                                {
-                                  "type": "text",
-                                  "id": "Alpi6",
-                                  "name": "dotSep2",
                                   "fill": "$--muted-foreground",
                                   "content": "·",
                                   "fontFamily": "Inter",
