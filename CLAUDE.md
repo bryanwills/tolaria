@@ -3,7 +3,7 @@
 ## Project
 Laputa App is a personal knowledge and life management desktop app, built with Tauri v2 + React + TypeScript + CodeMirror 6. It reads a vault of markdown files with YAML frontmatter and presents them in a four-panel UI inspired by Bear Notes.
 
-**Full project spec** (ontology, UI design, milestones): `~/OpenClaw/projects/laputa-app.md`
+**Full project spec** (ontology, UI design, milestones): `docs/PROJECT-SPEC.md`
 **UI wireframes**: `ui-design.pen`
 
 ## Tech Stack
