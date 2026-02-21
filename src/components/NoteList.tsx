@@ -6,7 +6,7 @@ import { Input } from '@/components/ui/input'
 import {
   MagnifyingGlass, Plus, Wrench, Flask, Target, ArrowsClockwise,
   Users, CalendarBlank, Tag, FileText, CaretDown, CaretRight, StackSimple,
-  Trash, Warning,
+  Warning,
 } from '@phosphor-icons/react'
 import type { ComponentType, SVGAttributes } from 'react'
 import { getTypeColor, getTypeLightColor } from '../utils/typeColors'
