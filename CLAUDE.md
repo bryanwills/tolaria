@@ -88,6 +88,8 @@ After every meaningful architectural decision or abstraction, update the relevan
 - Every new module should have tests
 - Test with realistic data — use real markdown files with YAML frontmatter, not toy examples
 - **Bug → Test rule**: Every bug found manually that tests didn't catch MUST result in a new test (unit or E2E) so it never regresses. Ask yourself: "Why didn't tests catch this?" and close the gap.
+- **New feature rule**: every task that adds or changes behavior MUST include tests that specifically cover the new behavior. "Existing tests pass" is not enough — new tests must exist for the new code path. This is a hard requirement for moving to In Review.
+- **No coverage theater**: tests must verify real business behavior (e.g. "archiving a note calls the right Tauri command and updates state"), not framework behavior (e.g. "component renders without crashing"). The goal is confidence that the feature works, not a number.
 - Edge cases matter: empty frontmatter, missing fields, malformed YAML, files with no H1 title
 
 ### Test Coverage (MANDATORY — run before every commit)
