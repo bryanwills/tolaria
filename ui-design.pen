@@ -10391,6 +10391,323 @@
           ]
         }
       ]
+    },
+    {
+      "type": "frame",
+      "id": "iogBH",
+      "x": 5500,
+      "y": 100,
+      "name": "Settings Panel — Modal",
+      "width": 520,
+      "fill": "$--background",
+      "cornerRadius": 12,
+      "stroke": {
+        "thickness": 1,
+        "fill": "$--border"
+      },
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "61XqC",
+          "name": "Header",
+          "width": "fill_container",
+          "height": 56,
+          "stroke": {
+            "thickness": {
+              "bottom": 1
+            },
+            "fill": "$--border"
+          },
+          "padding": [
+            0,
+            24
+          ],
+          "justifyContent": "space_between",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "2IAX7",
+              "name": "Title",
+              "fill": "$--foreground",
+              "content": "Settings",
+              "fontFamily": "Inter",
+              "fontSize": 16,
+              "fontWeight": "600"
+            },
+            {
+              "type": "icon_font",
+              "id": "kIGy9",
+              "name": "Close Icon",
+              "width": 16,
+              "height": 16,
+              "iconFontName": "x",
+              "iconFontFamily": "lucide",
+              "fill": "$--muted-foreground"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "Jk6ga",
+          "name": "Body",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 24,
+          "padding": 24,
+          "children": [
+            {
+              "type": "text",
+              "id": "efWNx",
+              "name": "Section Label",
+              "fill": "$--foreground",
+              "content": "AI Provider Keys",
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "600"
+            },
+            {
+              "type": "text",
+              "id": "wYQL5",
+              "name": "Section Description",
+              "fill": "$--muted-foreground",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "API keys are stored locally on your device. Never sent to our servers.",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "lo4r8",
+              "name": "Anthropic Key Row",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 6,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "WogRV",
+                  "name": "anthropicLabel",
+                  "fill": "$--foreground",
+                  "content": "Anthropic",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "500"
+                },
+                {
+                  "type": "frame",
+                  "id": "GUELn",
+                  "name": "Input",
+                  "width": "fill_container",
+                  "height": 36,
+                  "fill": "$--background",
+                  "cornerRadius": "$--radius-md",
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "$--border"
+                  },
+                  "gap": 8,
+                  "padding": [
+                    0,
+                    10
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "NjLRf",
+                      "name": "anthropicValue",
+                      "fill": "$--foreground",
+                      "content": "sk-ant-•••••••••••••k4Rm",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "icon_font",
+                      "id": "kBDAI",
+                      "name": "anthropicClear",
+                      "width": 14,
+                      "height": 14,
+                      "iconFontName": "x",
+                      "iconFontFamily": "lucide",
+                      "fill": "$--muted-foreground"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "qaTjV",
+              "name": "OpenAI Key Row",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 6,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "etofy",
+                  "name": "openaiLabel",
+                  "fill": "$--foreground",
+                  "content": "OpenAI",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "500"
+                },
+                {
+                  "type": "frame",
+                  "id": "BKXuT",
+                  "name": "Input Empty",
+                  "width": "fill_container",
+                  "height": 36,
+                  "fill": "$--background",
+                  "cornerRadius": "$--radius-md",
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "$--border"
+                  },
+                  "padding": [
+                    0,
+                    10
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "EHi9A",
+                      "name": "openaiPlaceholder",
+                      "fill": "$--muted-foreground",
+                      "content": "sk-...",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "ZM8dg",
+              "name": "Google Key Row",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 6,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "qzpsp",
+                  "name": "googleLabel",
+                  "fill": "$--foreground",
+                  "content": "Google AI",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "500"
+                },
+                {
+                  "type": "frame",
+                  "id": "pRsLr",
+                  "name": "Input Empty",
+                  "width": "fill_container",
+                  "height": 36,
+                  "fill": "$--background",
+                  "cornerRadius": "$--radius-md",
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "$--border"
+                  },
+                  "padding": [
+                    0,
+                    10
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "KAqg2",
+                      "name": "googlePlaceholder",
+                      "fill": "$--muted-foreground",
+                      "content": "AIza...",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "be7TS",
+          "name": "Footer",
+          "width": "fill_container",
+          "height": 56,
+          "stroke": {
+            "thickness": {
+              "top": 1
+            },
+            "fill": "$--border"
+          },
+          "gap": 12,
+          "padding": [
+            0,
+            24
+          ],
+          "justifyContent": "end",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "LAIeB",
+              "name": "footerHint",
+              "fill": "$--muted-foreground",
+              "content": "Cmd+, to open settings",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "DR2VW",
+              "name": "Spacer",
+              "width": "fill_container",
+              "height": 1
+            },
+            {
+              "type": "frame",
+              "id": "u9fBE",
+              "name": "Save Button",
+              "height": 32,
+              "fill": "$--primary",
+              "cornerRadius": "$--radius-md",
+              "padding": [
+                0,
+                16
+              ],
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "yRYWq",
+                  "name": "saveBtnLabel",
+                  "fill": "$--primary-foreground",
+                  "content": "Save",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "500"
+                }
+              ]
+            }
+          ]
+        }
+      ]
     }
   ],
   "themes": {
