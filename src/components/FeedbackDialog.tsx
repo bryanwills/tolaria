@@ -1,6 +1,6 @@
 import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Megaphone } from '@phosphor-icons/react'
-import { ArrowUpRight, Bug, Check, Copy, GitPullRequest, Lightbulb, MessagesSquare } from 'lucide-react'
+import { ArrowUpRight, Bug, Check, Copy, GitPullRequest, Lightbulb, MessagesSquare, Newspaper } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   Card,
@@ -18,6 +18,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import {
+  REFACTORING_HOME_URL,
   TOLARIA_GITHUB_CONTRIBUTING_URL,
   TOLARIA_GITHUB_DISCUSSIONS_URL,
   TOLARIA_GITHUB_ISSUES_URL,
@@ -79,9 +80,10 @@ const EMPTY_DIALOG_OPENER: ReturnType<typeof takeFeedbackDialogOpener> = {
   reopenCommandPalette: false,
 }
 
-type ContributionTone = 'green' | 'yellow' | 'purple' | 'red'
+type ContributionTone = 'blue' | 'green' | 'yellow' | 'purple' | 'red'
 
 const CONTRIBUTION_TONE_CLASSES: Record<ContributionTone, string> = {
+  blue: 'bg-[var(--accent-blue-light)] text-[var(--accent-blue)]',
   green: 'bg-[var(--accent-green-light)] text-[var(--accent-green)]',
   yellow: 'bg-[var(--accent-yellow-light)] text-[var(--accent-yellow)]',
   purple: 'bg-[var(--accent-purple-light)] text-[var(--accent-purple)]',
@@ -89,16 +91,27 @@ const CONTRIBUTION_TONE_CLASSES: Record<ContributionTone, string> = {
 }
 
 const CONTRIBUTION_BUTTON_CLASSES: Record<ContributionTone, string> = {
+  blue: 'border-[var(--accent-blue)] hover:bg-[var(--accent-blue-light)] [&_svg]:text-[var(--accent-blue)]',
   green: 'border-[var(--accent-green)] hover:bg-[var(--accent-green-light)] [&_svg]:text-[var(--accent-green)]',
   yellow: 'border-[var(--accent-yellow)] hover:bg-[var(--accent-yellow-light)] [&_svg]:text-[var(--accent-yellow)]',
   purple: 'border-[var(--accent-purple)] hover:bg-[var(--accent-purple-light)] [&_svg]:text-[var(--accent-purple)]',
   red: 'border-[var(--accent-red)] hover:bg-[var(--accent-red-light)] [&_svg]:text-[var(--accent-red)]',
 }
 
+const SPONSOR_SUPPORT_PATH: ContributionPath = {
+  title: 'Sponsor / Support',
+  description: 'Luca here 👋 my full-time job is running Refactoring, a newsletter for 170K+ engineers about how to run good teams and ship software with AI. I write about workflows, interview tech leaders (e.g. DHH, Martin Fowler, and more) and run a private community of 2000+ engineers with monthly live coaching, AI club, and more.\n\nTolaria is FOSS and always will be. If you like it, the best way to support it is to subscribe to the newsletter.',
+  ctaLabel: 'Check out Refactoring',
+  label: 'Refactoring',
+  url: REFACTORING_HOME_URL,
+  icon: Newspaper,
+  tone: 'blue',
+}
+
 const CONTRIBUTION_PATHS: ContributionPath[] = [
   {
     title: 'Feature requests',
-    description: 'Search on the product board first, upvote an existing idea if already there, and only create a new post when genuinely new!',
+    description: 'Search on the board first, upvote existing ideas, and create new posts when genuinely new!',
     ctaLabel: 'Open Product Board',
     label: 'Product Board',
     url: TOLARIA_PRODUCT_BOARD_URL,
@@ -107,7 +120,7 @@ const CONTRIBUTION_PATHS: ContributionPath[] = [
   },
   {
     title: 'Discussions',
-    description: 'Use GitHub Discussions for questions, broader conversations, idea sharing, and community context that is not a concrete bug report.',
+    description: 'Use Discussions for questions, conversations, show & tell, and community context.',
     ctaLabel: 'Open Discussions',
     label: 'GitHub Discussions',
     url: TOLARIA_GITHUB_DISCUSSIONS_URL,
@@ -116,7 +129,7 @@ const CONTRIBUTION_PATHS: ContributionPath[] = [
   },
   {
     title: 'Contribute code',
-    description: 'Small, focused pull requests are welcome. Check planned or in-progress work first so you are building in the right place.',
+    description: 'Small, focused PRs are welcome. Check the board first so you build the right things!',
     ctaLabel: 'Open Pull Requests',
     label: 'GitHub Pull Requests',
     url: TOLARIA_GITHUB_PULL_REQUESTS_URL,
@@ -180,7 +193,7 @@ function ContributionCard({
           </span>
           <CardTitle className="text-sm font-semibold">{title}</CardTitle>
         </div>
-        <CardDescription className="text-sm leading-6 text-muted-foreground">
+        <CardDescription className="whitespace-pre-line text-sm leading-6 text-muted-foreground">
           {description}
         </CardDescription>
       </CardHeader>
@@ -337,7 +350,18 @@ function ContributionGrid({
 }) {
   return (
     <div className="grid gap-4 sm:grid-cols-2">
-      {CONTRIBUTION_PATHS.map((path, index) => {
+      <div className="sm:col-span-2">
+        <ContributionCard
+          title={SPONSOR_SUPPORT_PATH.title}
+          description={SPONSOR_SUPPORT_PATH.description}
+          ctaLabel={SPONSOR_SUPPORT_PATH.ctaLabel}
+          icon={SPONSOR_SUPPORT_PATH.icon}
+          tone={SPONSOR_SUPPORT_PATH.tone}
+          autoFocus={true}
+          onAction={() => onOpenLink(SPONSOR_SUPPORT_PATH.label, SPONSOR_SUPPORT_PATH.url)}
+        />
+      </div>
+      {CONTRIBUTION_PATHS.map((path) => {
         const secondaryLink = path.secondaryLink
 
         return (
@@ -348,7 +372,6 @@ function ContributionGrid({
             ctaLabel={path.ctaLabel}
             icon={path.icon}
             tone={path.tone}
-            autoFocus={index === 0}
             onAction={() => onOpenLink(path.label, path.url)}
             secondaryAction={secondaryLink ? (
               <ContributionLinkButton
@@ -363,7 +386,7 @@ function ContributionGrid({
       })}
       <ContributionCard
         title="Report a bug"
-        description="Explain how to reproduce, what you expected, and what actually happened. Check for duplicate bugs first. Attach the sanitized diagnostic bundle please!"
+        description="Explain how to reproduce, what you expected, vs what happened. Attach the diagnostics please!"
         ctaLabel="Open GitHub Issues"
         icon={Bug}
         tone="red"
@@ -411,7 +434,7 @@ export function FeedbackDialog({
 
   return (
     <Dialog open={open} onOpenChange={(next) => { if (!next) handleClose() }}>
-      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-[760px]" data-testid="feedback-dialog">
+      <DialogContent className="max-h-[92dvh] overflow-y-auto sm:max-w-[820px]" data-testid="feedback-dialog">
         <DialogHeader className="space-y-2">
           <DialogTitle className="flex items-center gap-2">
             <Megaphone size={18} weight="duotone" />

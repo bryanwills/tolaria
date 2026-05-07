@@ -2,6 +2,7 @@ import type { useCreateBlockNote } from '@blocknote/react'
 import type { VaultEntry } from '../types'
 import { splitFrontmatter, restoreWikilinksInBlocks } from '../utils/wikilinks'
 import { compactMarkdown } from '../utils/compact-markdown'
+import { hasDurableEditorBlocks, serializeDurableEditorBlocks } from '../utils/editorDurableMarkdown'
 import { portableImageUrls } from '../utils/vaultImages'
 
 interface Tab {
@@ -29,7 +30,7 @@ export function serializeEditorDocumentToMarkdown(
 ): string {
   const blocks = editor.document
   const restored = restoreWikilinksInBlocks(blocks)
-  const rawBodyMarkdown = compactMarkdown(editor.blocksToMarkdownLossy(restored as typeof blocks))
+  const rawBodyMarkdown = compactMarkdown(serializeDurableEditorBlocks(editor, restored))
   const bodyMarkdown = vaultPath ? portableImageUrls(rawBodyMarkdown, vaultPath) : rawBodyMarkdown
   const [frontmatter] = splitFrontmatter(tabContent)
   return `${frontmatter}${bodyMarkdown}`
@@ -77,12 +78,23 @@ export function syncActiveTabIntoRawBuffer(options: {
   activeTabPath: string | null
   activeTabContent: string | null
   rawLatestContentRef: React.MutableRefObject<string | null>
+  serializeRichEditorContent?: boolean
   vaultPath?: string
 }) {
-  const { editor, activeTabPath, activeTabContent, rawLatestContentRef, vaultPath } = options
+  const {
+    editor,
+    activeTabPath,
+    activeTabContent,
+    rawLatestContentRef,
+    serializeRichEditorContent = true,
+    vaultPath,
+  } = options
   if (!activeTabPath || activeTabContent === null) return null
 
-  const syncedContent = serializeEditorDocumentToMarkdown(editor, activeTabContent, vaultPath)
+  const shouldSerializeRichEditorContent = serializeRichEditorContent || hasDurableEditorBlocks(editor.document)
+  const syncedContent = shouldSerializeRichEditorContent
+    ? serializeEditorDocumentToMarkdown(editor, activeTabContent, vaultPath)
+    : activeTabContent
   rawLatestContentRef.current = syncedContent
   return syncedContent
 }

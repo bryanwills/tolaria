@@ -2,6 +2,7 @@ import { act, fireEvent, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { NoteList } from './NoteList'
 import { makeEntry, makeIndexedEntry, mockEntries, renderNoteList } from '../test-utils/noteListTestUtils'
+import type { NoteStatus } from '../types'
 
 describe('NoteList status indicators', () => {
   it('shows a modified indicator for modified notes', () => {
@@ -40,6 +41,27 @@ describe('NoteList status indicators', () => {
     expect(screen.getAllByTestId('new-indicator')).toHaveLength(1)
     expect(screen.queryByTestId('modified-indicator')).not.toBeInTheDocument()
   })
+
+  it('keeps the green indicator steady while a new note is edited and saved', () => {
+    const targetPath = mockEntries[0].path
+    const getNoteStatus = (noteStatus: NoteStatus) => (path: string) => path === targetPath ? noteStatus : 'clean'
+    const { props, rerender } = renderNoteList({ getNoteStatus: getNoteStatus('new') })
+    const rerenderWithStatus = (nextStatus: NoteStatus) => {
+      rerender(<NoteList {...props} getNoteStatus={getNoteStatus(nextStatus)} />)
+    }
+    const expectSteadyIndicator = (testId: string) => {
+      const indicator = screen.getByTestId(testId)
+      expect(indicator).not.toHaveClass('tab-status-pulse')
+    }
+
+    expectSteadyIndicator('new-indicator')
+    rerenderWithStatus('unsaved')
+    expectSteadyIndicator('unsaved-indicator')
+    rerenderWithStatus('pendingSave')
+    expectSteadyIndicator('pending-save-indicator')
+    rerenderWithStatus('new')
+    expectSteadyIndicator('new-indicator')
+  })
 })
 
 describe('NoteList virtualized datasets', () => {
@@ -56,7 +78,7 @@ describe('NoteList virtualized datasets', () => {
     expect(screen.getByText('Note 499')).toBeInTheDocument()
   })
 
-  it('filters large datasets by search query', async () => {
+  it('filters large datasets by search query', { timeout: 15000 }, async () => {
     vi.useFakeTimers()
     try {
       const entries = [

@@ -176,6 +176,44 @@ describe('DynamicPropertiesPanel', () => {
     expect(screen.getByText('\u2014').parentElement).toHaveClass('justify-start', 'text-left')
   })
 
+  it('keeps present empty properties visible and editable', () => {
+    renderPanel({ frontmatter: { 'start date': '' }, onUpdateProperty })
+
+    expect(screen.getByText('Start date')).toBeInTheDocument()
+    fireEvent.click(screen.getByText('\u2014'))
+    const input = screen.getByDisplayValue('')
+    fireEvent.change(input, { target: { value: '2026-05-03' } })
+    fireEvent.blur(input)
+
+    expect(onUpdateProperty).toHaveBeenCalledWith('start date', '2026-05-03')
+  })
+
+  it('shows missing type-defined properties as gray editable placeholders', () => {
+    const typeEntry = makeEntry({
+      title: 'Book',
+      isA: 'Type',
+      properties: {
+        'start date': null,
+      },
+    })
+
+    renderPanel({
+      entry: makeEntry({ title: 'Dune', isA: 'Book' }),
+      entries: [typeEntry],
+      frontmatter: {},
+      onUpdateProperty,
+    })
+
+    const placeholder = screen.getByTestId('type-derived-property')
+    expect(within(placeholder).getByText('Start date')).toHaveClass('text-muted-foreground/40')
+    fireEvent.click(placeholder)
+    const input = screen.getByDisplayValue('')
+    fireEvent.change(input, { target: { value: '2026-05-04' } })
+    fireEvent.blur(input)
+
+    expect(onUpdateProperty).toHaveBeenCalledWith('start date', '2026-05-04')
+  })
+
   it('hides Owner with wikilink value from Properties panel', () => {
     renderPanel({ frontmatter: { Owner: '[[person/luca]]' } })
     // Owner with wikilink goes to RelationshipsPanel, not Properties
@@ -203,6 +241,19 @@ describe('DynamicPropertiesPanel', () => {
     // 'Belongs to' has a plain text value, not a wikilink — should render as property
     expect(screen.getByText('Belongs to')).toBeInTheDocument()
     expect(screen.getByText('some-team')).toBeInTheDocument()
+  })
+
+  it('localizes UI actions without translating stored property names', () => {
+    renderPanel({
+      frontmatter: { Status: 'Active', 'Belongs to': 'some-team' },
+      onAddProperty,
+      locale: 'zh-CN',
+    })
+
+    expect(screen.getByText('Type')).toBeInTheDocument()
+    expect(screen.getByText('Status')).toBeInTheDocument()
+    expect(screen.getByText('Belongs to')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '添加属性' })).toBeInTheDocument()
   })
 
   it('hides custom field with wikilink value from Properties', () => {

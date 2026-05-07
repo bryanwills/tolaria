@@ -3,6 +3,13 @@ import { invoke } from '@tauri-apps/api/core'
 import { isTauri, mockInvoke } from '../mock-tauri'
 import type { VaultEntry } from '../types'
 import { slugify } from './useNoteCreation'
+import {
+  findByNotePath,
+  normalizeVaultRelativePath,
+  notePathFilename,
+  notePathsMatch,
+  vaultRelativePathLabel,
+} from '../utils/notePathIdentity'
 
 interface RenameResult {
   new_path: string
@@ -98,12 +105,12 @@ export async function performMoveNoteToFolder({
 }
 
 export function buildRenamedEntry(entry: VaultEntry, newTitle: string, newPath: string): VaultEntry {
-  const slug = newTitle.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')
-  return { ...entry, path: newPath, filename: `${slug}.md`, title: newTitle }
+  const filename = notePathFilename(newPath)
+  return { ...entry, path: newPath, filename, title: newTitle }
 }
 
 export function buildFilenameRenamedEntry(entry: VaultEntry, newPath: string): VaultEntry {
-  const filename = newPath.split('/').pop() ?? entry.filename
+  const filename = notePathFilename(newPath)
   return { ...entry, path: newPath, filename }
 }
 
@@ -156,8 +163,7 @@ export function renameToastMessage(updatedFiles: number, failedUpdates = 0): str
 }
 
 function folderLabel(params: { folderPath: string }): string {
-  const trimmed = params.folderPath.trim().replace(/^\/+|\/+$/g, '')
-  return trimmed.split('/').filter(Boolean).at(-1) ?? trimmed
+  return vaultRelativePathLabel(params.folderPath)
 }
 
 function moveToastMessage(folderPath: string, updatedFiles: number, failedUpdates = 0): string {
@@ -192,6 +198,11 @@ export async function reloadTabsAfterRename({
 interface Tab {
   entry: VaultEntry
   content: string
+}
+
+function findRenameEntry(entries: VaultEntry[], tabs: Tab[], path: string): VaultEntry | undefined {
+  return findByNotePath(entries, path)
+    ?? tabs.find((tab) => notePathsMatch(tab.entry.path, path))?.entry
 }
 
 function renameErrorMessage(err: unknown): string {
@@ -251,12 +262,15 @@ function useRenameResultApplier(
     onEntryRenamed: (oldPath: string, newEntry: Partial<VaultEntry> & { path: string }, newContent: string) => void,
     options?: ApplyRenameOptions,
   ) => {
-    const entry = entries.find((item) => item.path === oldPath)
+    const currentTabs = tabsRef.current
+    const entry = findRenameEntry(entries, currentTabs, oldPath)
     const newContent = await loadNoteContent({ path: result.new_path })
     const newEntry = buildEntry(entry, result.new_path)
-    const otherTabPaths = tabsRef.current.filter((tab) => tab.entry.path !== oldPath).map((tab) => tab.entry.path)
-    setTabs((prev) => prev.map((tab) => tab.entry.path === oldPath ? { entry: newEntry, content: newContent } : tab))
-    if (activeTabPathRef.current === oldPath) handleSwitchTab(result.new_path)
+    const otherTabPaths = currentTabs
+      .filter((tab) => !notePathsMatch(tab.entry.path, oldPath) && !notePathsMatch(tab.entry.path, result.new_path))
+      .map((tab) => tab.entry.path)
+    setTabs((prev) => prev.map((tab) => notePathsMatch(tab.entry.path, oldPath) ? { entry: newEntry, content: newContent } : tab))
+    if (notePathsMatch(activeTabPathRef.current, oldPath)) handleSwitchTab(result.new_path)
     onEntryRenamed(oldPath, newEntry, newContent)
     await reloadTabsAfterRename({ tabPaths: otherTabPaths, updateTabContent })
     await reloadVaultAfterRename(reloadVault)
@@ -304,7 +318,7 @@ async function runRenameAction({
 }): Promise<RenameResult | null> {
   try {
     const result = await perform()
-    if (allowUnchangedResult && result.new_path === path) return result
+    if (allowUnchangedResult && notePathsMatch(result.new_path, path)) return result
     await applyRenameResult(path, result, buildEntry, onEntryRenamed, { successMessage })
     return result
   } catch (err) {
@@ -322,7 +336,7 @@ export function useNoteRename(config: NoteRenameConfig, tabDeps: RenameTabDeps) 
     path: string, newTitle: string, vaultPath: string,
     onEntryRenamed: (oldPath: string, newEntry: Partial<VaultEntry> & { path: string }, newContent: string) => void,
   ) => {
-    const entry = entries.find((e) => e.path === path)
+    const entry = findRenameEntry(entries, tabsRef.current, path)
     await runRenameAction({
       path,
       perform: () => performRename({ path, newTitle, vaultPath, oldTitle: entry?.title }),
@@ -333,7 +347,7 @@ export function useNoteRename(config: NoteRenameConfig, tabDeps: RenameTabDeps) 
       errorMessage: renameErrorMessage,
       logLabel: 'Failed to rename note',
     })
-  }, [entries, applyRenameResult, setToastMessage])
+  }, [entries, tabsRef, applyRenameResult, setToastMessage])
 
   const handleRenameFilename = useCallback(async (
     path: string,
@@ -359,7 +373,7 @@ export function useNoteRename(config: NoteRenameConfig, tabDeps: RenameTabDeps) 
     vaultPath: string,
     onEntryRenamed: (oldPath: string, newEntry: Partial<VaultEntry> & { path: string }, newContent: string) => void,
   ) => {
-    const normalizedFolderPath = folderPath.trim().replace(/^\/+|\/+$/g, '')
+    const normalizedFolderPath = normalizeVaultRelativePath(folderPath)
     return runRenameAction({
       path,
       perform: () => performMoveNoteToFolder({ path, folderPath: normalizedFolderPath, vaultPath }),

@@ -24,8 +24,8 @@ import { WebSocketServer } from 'ws'
 import {
   getNote, searchNotes, vaultContext,
 } from './vault.js'
+import { requireVaultPath } from './vault-path.js'
 
-const VAULT_PATH = process.env.VAULT_PATH || process.env.HOME + '/Laputa'
 const WS_PORT = parseInt(process.env.WS_PORT || '9710', 10)
 const WS_UI_PORT = parseInt(process.env.WS_UI_PORT || '9711', 10)
 const LOOPBACK_HOST = 'localhost'
@@ -37,6 +37,13 @@ const TRUSTED_UI_ORIGINS = new Set([
 
 /** @type {WebSocketServer | null} */
 let uiBridge = null
+let vaultPath = null
+const UNKNOWN_TOOL = Symbol('unknown tool')
+
+function activeVaultPath() {
+  vaultPath ??= requireVaultPath()
+  return vaultPath
+}
 
 function broadcastUiAction(action, payload) {
   if (!uiBridge) return
@@ -47,30 +54,65 @@ function broadcastUiAction(action, payload) {
 }
 
 
-const TOOL_HANDLERS = {
-  open_note: (args) => getNote(VAULT_PATH, args.path).then(note => ({ content: note.content, frontmatter: note.frontmatter })),
-  read_note: (args) => getNote(VAULT_PATH, args.path).then(note => ({ content: note.content, frontmatter: note.frontmatter })),
-  search_notes: (args) => searchNotes(VAULT_PATH, args.query, args.limit),
-  vault_context: () => vaultContext(VAULT_PATH),
-  ui_open_note: (args) => { broadcastUiAction('vault_changed', { path: args.path }); broadcastUiAction('open_note', { path: args.path }); return { ok: true } },
-  ui_open_tab: (args) => { broadcastUiAction('vault_changed', { path: args.path }); broadcastUiAction('open_tab', { path: args.path }); return { ok: true } },
-  ui_highlight: (args) => { broadcastUiAction('highlight', { element: args.element, path: args.path }); return { ok: true } },
-  ui_set_filter: (args) => { broadcastUiAction('set_filter', { filterType: args.type }); return { ok: true } },
-  highlight_editor: (args) => { broadcastUiAction('highlight', { element: args.element, path: args.path }); return { ok: true } },
-  refresh_vault: (args) => { broadcastUiAction('vault_changed', { path: args?.path }); return { ok: true } },
+async function readNoteTool(args) {
+  const note = await getNote(activeVaultPath(), args.path)
+  return { content: note.content, frontmatter: note.frontmatter }
+}
+
+function uiOpenNoteTool(args) {
+  broadcastUiAction('vault_changed', { path: args.path })
+  broadcastUiAction('open_note', { path: args.path })
+  return { ok: true }
+}
+
+function uiOpenTabTool(args) {
+  broadcastUiAction('vault_changed', { path: args.path })
+  broadcastUiAction('open_tab', { path: args.path })
+  return { ok: true }
+}
+
+function highlightTool(args) {
+  broadcastUiAction('highlight', { element: args.element, path: args.path })
+  return { ok: true }
+}
+
+function uiSetFilterTool(args) {
+  broadcastUiAction('set_filter', { filterType: args.type })
+  return { ok: true }
+}
+
+function refreshVaultTool(args) {
+  broadcastUiAction('vault_changed', { path: args?.path })
+  return { ok: true }
+}
+
+const TOOL_EXECUTORS = [
+  ['open_note', readNoteTool],
+  ['read_note', readNoteTool],
+  ['search_notes', (args) => searchNotes(activeVaultPath(), args.query, args.limit)],
+  ['vault_context', () => vaultContext(activeVaultPath())],
+  ['ui_open_note', uiOpenNoteTool],
+  ['ui_open_tab', uiOpenTabTool],
+  ['ui_highlight', highlightTool],
+  ['highlight_editor', highlightTool],
+  ['ui_set_filter', uiSetFilterTool],
+  ['refresh_vault', refreshVaultTool],
+]
+
+function callToolHandler(tool, args) {
+  const executor = TOOL_EXECUTORS.find(([name]) => name === tool)?.[1]
+  return executor ? executor(args) : UNKNOWN_TOOL
 }
 
 async function handleMessage(data) {
   const msg = JSON.parse(data)
   const { id, tool, args } = msg
 
-  const handler = TOOL_HANDLERS[tool]
-  if (!handler) {
-    return { id, error: `Unknown tool: ${tool}` }
-  }
-
   try {
-    const result = await handler(args || {})
+    const result = await callToolHandler(tool, args || {})
+    if (result === UNKNOWN_TOOL) {
+      return { id, error: `Unknown tool: ${tool}` }
+    }
     return { id, result }
   } catch (err) {
     return { id, error: err.message }
@@ -164,6 +206,7 @@ export function startUiBridge(port = WS_UI_PORT) {
 }
 
 export function startBridge(port = WS_PORT) {
+  const currentVaultPath = activeVaultPath()
   const wss = new WebSocketServer({
     port,
     host: LOOPBACK_HOST,
@@ -171,7 +214,7 @@ export function startBridge(port = WS_PORT) {
   })
 
   wss.on('connection', (ws) => {
-    console.error(`[ws-bridge] Client connected (vault: ${VAULT_PATH})`)
+    console.error(`[ws-bridge] Client connected (vault: ${currentVaultPath})`)
 
     ws.on('message', async (raw) => {
       try {
@@ -192,5 +235,11 @@ export function startBridge(port = WS_PORT) {
 // Run directly if invoked as main module
 const isMain = process.argv[1]?.endsWith('ws-bridge.js')
 if (isMain) {
-  startUiBridge().then(() => startBridge())
+  try {
+    activeVaultPath()
+    startUiBridge().then(() => startBridge())
+  } catch (err) {
+    console.error(`[ws-bridge] ${err.message}`)
+    process.exit(1)
+  }
 }

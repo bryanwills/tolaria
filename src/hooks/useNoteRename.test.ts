@@ -58,6 +58,14 @@ describe('buildRenamedEntry', () => {
     expect(renamed.status).toBe('Done')
     expect(renamed.aliases).toEqual(['x'])
   })
+
+  it('derives the filename from the backend path for Unicode titles', () => {
+    const entry = makeEntry({ path: '/vault/old.md', filename: 'old.md', title: 'Old' })
+    const renamed = buildRenamedEntry(entry, '你好', '/vault/你好.md')
+    expect(renamed.path).toBe('/vault/你好.md')
+    expect(renamed.filename).toBe('你好.md')
+    expect(renamed.title).toBe('你好')
+  })
 })
 
 describe('renameToastMessage', () => {
@@ -119,11 +127,13 @@ describe('useNoteRename hook', () => {
     ))
 
   const runHandleRenameNote = async ({
+    path = '/vault/old.md',
     entries = [],
     renameResult = { new_path: '/vault/new.md', updated_files: 0, failed_updates: 0 },
     activePath = null,
     onEntryRenamed = vi.fn(),
   }: {
+    path?: string
     entries?: VaultEntry[]
     renameResult?: RenameNoteResult
     activePath?: string | null
@@ -134,7 +144,7 @@ describe('useNoteRename hook', () => {
 
     const { result } = renderUseNoteRename(entries)
     await act(async () => {
-      await result.current.handleRenameNote('/vault/old.md', 'New', '/vault', onEntryRenamed)
+      await result.current.handleRenameNote(path, 'New', '/vault', onEntryRenamed)
     })
 
     return { onEntryRenamed }
@@ -188,6 +198,17 @@ describe('useNoteRename hook', () => {
     expect(handleSwitchTab).toHaveBeenCalledWith('/vault/new.md')
   })
 
+  it('switches active tab when macOS /tmp aliases identify the renamed note', async () => {
+    await runHandleRenameNote({
+      path: '/tmp/vault/old.md',
+      entries: [makeEntry({ path: '/private/tmp/vault/old.md' })],
+      renameResult: { new_path: '/tmp/vault/new.md', updated_files: 0, failed_updates: 0 },
+      activePath: '/private/tmp/vault/old.md',
+    })
+
+    expect(handleSwitchTab).toHaveBeenCalledWith('/tmp/vault/new.md')
+  })
+
   it('handleRenameFilename renames the file while preserving the existing title', async () => {
     const entry = makeEntry({ path: '/vault/old-name.md', filename: 'old-name.md', title: 'Project Kickoff' })
     vi.mocked(mockInvoke).mockImplementation(async (cmd: string) => {
@@ -220,6 +241,41 @@ describe('useNoteRename hook', () => {
       '# Project Kickoff\n',
     )
     expect(setToastMessage).toHaveBeenCalledWith('Updated 1 note')
+  })
+
+  it('preserves active tab metadata when filename rename lands after a stale vault reload', async () => {
+    const entry = makeEntry({ path: '/vault/untitled-1.md', filename: 'untitled-1.md', title: 'Fresh Title' })
+    let tabs = [{ entry, content: '# Fresh Title\n' }]
+    const setTabs = vi.fn((update: typeof tabs | ((prev: typeof tabs) => typeof tabs)) => {
+      tabs = typeof update === 'function' ? update(tabs) : update
+    })
+    vi.mocked(mockInvoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'rename_note_filename') return { new_path: '/vault/fresh-title.md', updated_files: 0, failed_updates: 0 }
+      if (cmd === 'get_note_content') return '# Fresh Title\n'
+      return ''
+    })
+
+    const { result } = renderHook(() => useNoteRename(
+      { entries: [], setToastMessage },
+      { tabs, setTabs, activeTabPathRef, handleSwitchTab, updateTabContent },
+    ))
+
+    const onEntryRenamed = vi.fn()
+    await act(async () => {
+      await result.current.handleRenameFilename('/vault/untitled-1.md', 'fresh-title', '/vault', onEntryRenamed)
+    })
+
+    expect(tabs[0].entry).toEqual(expect.objectContaining({
+      path: '/vault/fresh-title.md',
+      filename: 'fresh-title.md',
+      title: 'Fresh Title',
+      isA: 'Note',
+    }))
+    expect(onEntryRenamed).toHaveBeenCalledWith(
+      '/vault/untitled-1.md',
+      expect.objectContaining({ title: 'Fresh Title', filename: 'fresh-title.md' }),
+      '# Fresh Title\n',
+    )
   })
 
   it('warns when rename succeeds but some backlink rewrites fail', async () => {
@@ -287,5 +343,34 @@ describe('useNoteRename hook', () => {
       '# Project Kickoff\n',
     )
     expect(setToastMessage).toHaveBeenCalledWith('Moved to "projects" and updated 1 note')
+  })
+
+  it('normalizes folder move targets before sending them to the backend', async () => {
+    const entry = makeEntry({ path: '/vault/notes/project-kickoff.md', filename: 'project-kickoff.md', title: 'Project Kickoff' })
+    vi.mocked(mockInvoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'move_note_to_folder') {
+        return {
+          new_path: '/vault/projects/active/project-kickoff.md',
+          updated_files: 0,
+          failed_updates: 0,
+        }
+      }
+      if (cmd === 'get_note_content') return '# Project Kickoff\n'
+      return ''
+    })
+
+    const { result } = renderHook(() => useNoteRename(
+      { entries: [entry], setToastMessage },
+      { tabs: [], setTabs, activeTabPathRef, handleSwitchTab, updateTabContent },
+    ))
+
+    await act(async () => {
+      await result.current.handleMoveNoteToFolder('/vault/notes/project-kickoff.md', String.raw`/projects\active/`, '/vault', vi.fn())
+    })
+
+    expect(mockInvoke).toHaveBeenCalledWith('move_note_to_folder', expect.objectContaining({
+      folder_path: 'projects/active',
+    }))
+    expect(setToastMessage).toHaveBeenCalledWith('Moved to "active"')
   })
 })

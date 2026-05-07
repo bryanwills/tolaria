@@ -112,6 +112,9 @@ let mockSettings: Settings = {
   anonymous_id: null,
   release_channel: null,
   theme_mode: null,
+  ui_language: null,
+  note_width_mode: null,
+  sidebar_type_pluralization_enabled: null,
   default_ai_agent: 'claude_code',
 }
 
@@ -134,6 +137,7 @@ let mockVaultList: { vaults: Array<{ label: string; path: string }>; active_vaul
 let mockVaultAiGuidanceStatus = {
   agents_state: 'managed',
   claude_state: 'managed',
+  gemini_state: 'managed',
   can_restore: false,
 } as const
 
@@ -152,10 +156,6 @@ function getMockRemoteState(path: string | null | undefined): boolean {
   const normalizedPath = normalizeMockVaultPath(path)
   if (!normalizedPath) return true
   return mockRemoteStateByVault[normalizedPath] ?? true
-}
-
-function escapeRegex({ text }: { text: string }) {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 function relativePathStem({ path, vaultPath }: { path: string; vaultPath: string }) {
@@ -190,10 +190,11 @@ function replaceRenamedWikilinks({ content, oldTargets, newPathStem }: {
   newPathStem: string
 }) {
   if (oldTargets.length === 0) return content
-  const pattern = new RegExp(`\\[\\[(?:${oldTargets.map((target) => escapeRegex({ text: target })).join('|')})(\\|[^\\]]*?)?\\]\\]`, 'g')
-  return content.replace(pattern, (_match: string, pipe: string | undefined) =>
-    pipe ? `[[${newPathStem}${pipe}]]` : `[[${newPathStem}]]`
-  )
+  const targets = new Set(oldTargets)
+  return content.replace(/\[\[([^\]|]+)(\|[^\]]*)?\]\]/g, (match: string, target: string, pipe: string | undefined) => {
+    if (!targets.has(target)) return match
+    return pipe ? `[[${newPathStem}${pipe}]]` : `[[${newPathStem}]]`
+  })
 }
 
 function updateMockRenameReferences({ newPath, newPathStem, oldTargets }: {
@@ -318,6 +319,7 @@ export const mockHandlers: Record<string, (args: any) => any> = {
   reload_vault_entry: (args: { path: string }) => MOCK_ENTRIES.find(e => e.path === args.path) ?? { path: args.path, title: 'Unknown', filename: 'unknown.md', aliases: [], belongsTo: [], relatedTo: [], archived: false, snippet: '', wordCount: 0, fileSize: 0, relationships: {}, outgoingLinks: [], properties: {} },
   sync_note_title: () => false,
   get_note_content: (args: { path: string }) => MOCK_CONTENT[args.path] ?? '',
+  validate_note_content: (args: { path: string; content: string }) => (MOCK_CONTENT[args.path] ?? '') === args.content,
   get_all_content: () => MOCK_CONTENT,
   get_file_history: (args: { path: string }) => mockFileHistory(args.path),
   get_modified_files: () => {
@@ -339,6 +341,8 @@ export const mockHandlers: Record<string, (args: any) => any> = {
   },
   get_build_number: () => 'bDEV',
   get_last_commit_info: (): LastCommitInfo => ({ shortHash: 'a1b2c3d', commitUrl: 'https://github.com/lucaong/laputa-vault/commit/a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0' }),
+  is_git_repo: () => true,
+  init_git_repo: () => null,
   git_pull: (): GitPullResult => ({ status: 'up_to_date', message: 'Already up to date', updatedFiles: [], conflictFiles: [] }),
   git_push: (): GitPushResult => ({ status: 'ok', message: 'Pushed to remote' }),
   git_remote_status: (args?: { vaultPath?: string; vault_path?: string }): GitRemoteStatus => {
@@ -375,18 +379,22 @@ export const mockHandlers: Record<string, (args: any) => any> = {
   get_ai_agents_status: () => ({
     claude_code: { installed: false, version: null },
     codex: { installed: false, version: null },
+    opencode: { installed: false, version: null },
+    pi: { installed: false, version: null },
+    gemini: { installed: false, version: null },
   }),
+  get_agent_docs_path: () => '/mock/Tolaria/resources/agent-docs',
   get_vault_ai_guidance_status: () => ({ ...mockVaultAiGuidanceStatus }),
   restore_vault_ai_guidance: () => {
     mockVaultAiGuidanceStatus = {
       agents_state: 'managed',
       claude_state: 'managed',
+      gemini_state: 'managed',
       can_restore: false,
     }
     return { ...mockVaultAiGuidanceStatus }
   },
   stream_claude_chat: () => 'mock-session',
-  stream_claude_agent: () => null,
   stream_ai_agent: () => null,
   save_note_content: (args: { path: string; content: string }) => {
     MOCK_CONTENT[args.path] = args.content
@@ -418,6 +426,9 @@ export const mockHandlers: Record<string, (args: any) => any> = {
       anonymous_id: s.anonymous_id,
       release_channel: s.release_channel,
       theme_mode: s.theme_mode ?? null,
+      ui_language: s.ui_language ?? null,
+      note_width_mode: s.note_width_mode ?? null,
+      sidebar_type_pluralization_enabled: s.sidebar_type_pluralization_enabled ?? null,
       default_ai_agent: s.default_ai_agent ?? null,
     }
     return null
@@ -481,10 +492,27 @@ export const mockHandlers: Record<string, (args: any) => any> = {
   },
   register_mcp_tools: () => 'registered',
   check_mcp_status: () => 'installed',
+  get_mcp_config_snippet: (args: { vaultPath?: string }) => JSON.stringify({
+    mcpServers: {
+      tolaria: {
+        type: 'stdio',
+        command: 'node',
+        args: ['/mock/Tolaria/mcp-server/index.js'],
+        env: {
+          VAULT_PATH: args.vaultPath ?? '/Users/mock/Documents/Getting Started',
+          WS_UI_PORT: '9711',
+        },
+      },
+    },
+  }, null, 2),
+  copy_text_to_clipboard: () => null,
+  read_text_from_clipboard: () => '',
+  sync_mcp_bridge_vault: (args: { vaultPath?: string | null }) => args.vaultPath ? 'started' : 'stopped',
   repair_vault: (): string => {
     mockVaultAiGuidanceStatus = {
       agents_state: 'managed',
       claude_state: 'managed',
+      gemini_state: 'managed',
       can_restore: false,
     }
     return 'Vault repaired'

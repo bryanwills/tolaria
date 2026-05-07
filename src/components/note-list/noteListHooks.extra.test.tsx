@@ -63,7 +63,7 @@ vi.mock('../../hooks/useNoteListKeyboard', () => ({
 }))
 
 vi.mock('../../hooks/useTabManagement', () => ({
-  prefetchNoteContent: (path: string) => prefetchNoteContentMock(path),
+  prefetchNoteContent: (entry: VaultEntry) => prefetchNoteContentMock(entry),
 }))
 
 vi.mock('./noteListUtils', async () => {
@@ -215,6 +215,32 @@ describe('noteListHooks extra', () => {
     })
 
     expect(result.current.sortPrefs.__list__).toEqual({ option: 'title', direction: 'asc' })
+  })
+
+  it('uses shorthand type sort fields as custom properties', () => {
+    const typeDocument = makeEntry({
+      path: '/vault/types/memory.md',
+      filename: 'memory.md',
+      title: 'Memory',
+      isA: 'Type',
+      sort: 'date:desc',
+    })
+    const memoryEntry = makeEntry({
+      isA: 'Memory',
+      properties: { date: '2026-05-06' },
+    })
+
+    const { result } = renderHook(() =>
+      useNoteListSort({
+        entries: [typeDocument, memoryEntry],
+        selection: { kind: 'sectionGroup', type: 'Memory', label: 'Memory' },
+        modifiedPathSet: new Set<string>(),
+        modifiedSuffixes: [],
+      }),
+    )
+
+    expect(result.current.listSort).toBe('property:date')
+    expect(result.current.listDirection).toBe('desc')
   })
 
   it('prefers selected view sort config and persists list sort changes back to the view definition', () => {
@@ -422,6 +448,12 @@ describe('noteListHooks extra', () => {
     vi.useFakeTimers()
     const deletedEntry = makeDeletedEntry()
     const liveEntry = makeEntry({ path: '/vault/note/live.md', filename: 'live.md', title: 'Live' })
+    const imageEntry = makeEntry({
+      path: '/vault/assets/photo.png',
+      filename: 'photo.png',
+      title: 'photo.png',
+      fileKind: 'binary',
+    })
     const onReplaceActiveTab = vi.fn()
     const onOpenDeletedNote = vi.fn()
     const onAutoTriggerDiff = vi.fn()
@@ -453,6 +485,7 @@ describe('noteListHooks extra', () => {
     act(() => {
       keyboardOptions.onOpen(deletedEntry)
       keyboardOptions.onPrefetch(liveEntry)
+      keyboardOptions.onPrefetch(imageEntry)
       routeNoteClickMock.mockImplementationOnce((
         entry: VaultEntry,
         _event: unknown,
@@ -468,7 +501,8 @@ describe('noteListHooks extra', () => {
     expect(onOpenDeletedNote).toHaveBeenCalledWith(deletedEntry)
     expect(onReplaceActiveTab).toHaveBeenCalledWith(liveEntry)
     expect(onAutoTriggerDiff).toHaveBeenCalledOnce()
-    expect(prefetchNoteContentMock).toHaveBeenCalledWith(liveEntry.path)
+    expect(prefetchNoteContentMock).toHaveBeenCalledWith(liveEntry)
+    expect(prefetchNoteContentMock).not.toHaveBeenCalledWith(imageEntry)
 
     vi.useRealTimers()
   })

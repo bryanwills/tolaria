@@ -1,5 +1,5 @@
 import { useEffect, type RefObject } from 'react'
-import { isUrlValue, normalizeUrl, openExternalUrl } from '../utils/url'
+import { openEditorAttachmentOrUrl } from './editorAttachmentActions'
 
 const CODE_CONTEXT_SELECTOR = '[data-content-type="codeBlock"], pre, code'
 
@@ -15,10 +15,8 @@ function resolveWikilinkTarget(target: HTMLElement) {
   return target.closest<HTMLElement>('.wikilink[data-target]')?.dataset.target ?? null
 }
 
-function resolveUrlTarget(target: HTMLElement) {
-  const href = target.closest<HTMLAnchorElement>('a[href]')?.getAttribute('href')?.trim()
-  if (!href || !isUrlValue(href)) return null
-  return normalizeUrl(href)
+function resolveAnchorHref(target: HTMLElement) {
+  return target.closest<HTMLAnchorElement>('a[href]')?.getAttribute('href')?.trim() ?? null
 }
 
 function blurActiveEditable(container: HTMLElement) {
@@ -33,9 +31,66 @@ function setFollowLinksActive(container: HTMLElement, active: boolean) {
   else container.removeAttribute('data-follow-links')
 }
 
+function consumeEditorLinkEvent(event: MouseEvent) {
+  event.preventDefault()
+  event.stopPropagation()
+}
+
+function scheduleAfterNativeClick(callback: () => void) {
+  if (typeof queueMicrotask === 'function') queueMicrotask(callback)
+  else window.setTimeout(callback, 0)
+}
+
+function activateWikilink(
+  event: MouseEvent,
+  container: HTMLElement,
+  target: string,
+  onNavigateWikilink: (target: string) => void,
+) {
+  consumeEditorLinkEvent(event)
+
+  if (!hasFollowModifier(event)) return
+
+  blurActiveEditable(container)
+  scheduleAfterNativeClick(() => onNavigateWikilink(target))
+}
+
+function activateUrl(event: MouseEvent, href: string, vaultPath?: string) {
+  consumeEditorLinkEvent(event)
+
+  if (!hasFollowModifier(event)) return
+
+  openEditorAttachmentOrUrl({ url: href, vaultPath, source: 'link' })
+}
+
+function handleEditorLinkClick(
+  event: MouseEvent,
+  container: HTMLElement,
+  onNavigateWikilink: (target: string) => void,
+  vaultPath?: string,
+) {
+  if (!(event.target instanceof HTMLElement) || isInsideCodeContext(event.target)) return
+
+  const wikilinkTarget = resolveWikilinkTarget(event.target)
+  if (wikilinkTarget) {
+    activateWikilink(event, container, wikilinkTarget, onNavigateWikilink)
+    return
+  }
+
+  const href = resolveAnchorHref(event.target)
+  if (href) activateUrl(event, href, vaultPath)
+}
+
+function handleEditorLinkMouseDown(event: MouseEvent) {
+  if (!(event.target instanceof HTMLElement) || isInsideCodeContext(event.target)) return
+
+  if (resolveWikilinkTarget(event.target)) consumeEditorLinkEvent(event)
+}
+
 export function useEditorLinkActivation(
   containerRef: RefObject<HTMLDivElement | null>,
   onNavigateWikilink: (target: string) => void,
+  vaultPath?: string,
 ) {
   useEffect(() => {
     const container = containerRef.current
@@ -49,26 +104,10 @@ export function useEditorLinkActivation(
       if (document.visibilityState !== 'visible') resetModifierState()
     }
     const handleClick = (event: MouseEvent) => {
-      if (!hasFollowModifier(event)) return
-      if (!(event.target instanceof HTMLElement) || isInsideCodeContext(event.target)) return
-
-      const wikilinkTarget = resolveWikilinkTarget(event.target)
-      if (wikilinkTarget) {
-        event.preventDefault()
-        event.stopPropagation()
-        blurActiveEditable(container)
-        onNavigateWikilink(wikilinkTarget)
-        return
-      }
-
-      const urlTarget = resolveUrlTarget(event.target)
-      if (!urlTarget) return
-
-      event.preventDefault()
-      event.stopPropagation()
-      openExternalUrl(urlTarget).catch((err) => console.warn('[link] Failed to open URL:', err))
+      handleEditorLinkClick(event, container, onNavigateWikilink, vaultPath)
     }
 
+    container.addEventListener('mousedown', handleEditorLinkMouseDown, true)
     container.addEventListener('click', handleClick, true)
     window.addEventListener('keydown', handleModifierChange)
     window.addEventListener('keyup', handleModifierChange)
@@ -76,6 +115,7 @@ export function useEditorLinkActivation(
     document.addEventListener('visibilitychange', handleVisibilityChange)
 
     return () => {
+      container.removeEventListener('mousedown', handleEditorLinkMouseDown, true)
       container.removeEventListener('click', handleClick, true)
       window.removeEventListener('keydown', handleModifierChange)
       window.removeEventListener('keyup', handleModifierChange)
@@ -83,5 +123,5 @@ export function useEditorLinkActivation(
       document.removeEventListener('visibilitychange', handleVisibilityChange)
       resetModifierState()
     }
-  }, [containerRef, onNavigateWikilink])
+  }, [containerRef, onNavigateWikilink, vaultPath])
 }

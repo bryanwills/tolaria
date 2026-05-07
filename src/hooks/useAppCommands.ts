@@ -1,12 +1,14 @@
 import { useCallback, useRef } from 'react'
 import type { AiAgentId, AiAgentsStatus } from '../lib/aiAgents'
+import type { AppLocale, UiLanguagePreference } from '../lib/i18n'
+import type { ThemeMode } from '../lib/themeMode'
 import type { VaultAiGuidanceStatus } from '../lib/vaultAiGuidance'
 import { useAppKeyboard } from './useAppKeyboard'
 import { useCommandRegistry } from './useCommandRegistry'
 import type { CommandAction } from './useCommandRegistry'
 import { useKeyboardNavigation } from './useKeyboardNavigation'
 import { useMenuEvents } from './useMenuEvents'
-import type { SidebarSelection, SidebarFilter, VaultEntry } from '../types'
+import type { NoteWidthMode, SidebarSelection, SidebarFilter, VaultEntry } from '../types'
 import { requestAddRemote } from '../utils/addRemoteEvents'
 import type { NoteListFilter } from '../utils/noteListHelpers'
 import type { ViewMode } from './useViewMode'
@@ -23,6 +25,9 @@ interface AppCommandsConfig {
   onQuickOpen: () => void
   onCommandPalette: () => void
   onSearch: () => void
+  onFindInNote?: () => void
+  onReplaceInNote?: () => void
+  onPastePlainText: () => void
   onCreateNote: () => void
   onCreateNoteOfType: (type: string) => void
   onSave: () => void
@@ -38,6 +43,15 @@ interface AppCommandsConfig {
   onToggleInspector: () => void
   onToggleDiff?: () => void
   onToggleRawEditor?: () => void
+  selectedViewName?: string
+  onMoveSelectedViewUp?: () => void
+  onMoveSelectedViewDown?: () => void
+  canMoveSelectedViewUp?: boolean
+  canMoveSelectedViewDown?: boolean
+  noteWidth?: NoteWidthMode
+  defaultNoteWidth?: NoteWidthMode
+  onSetNoteWidth?: (mode: NoteWidthMode) => void
+  onSetDefaultNoteWidth?: (mode: NoteWidthMode) => void
   activeNoteModified: boolean
   onZoomIn: () => void
   onZoomOut: () => void
@@ -57,13 +71,21 @@ interface AppCommandsConfig {
   onCreateEmptyVault?: () => void
   onAddRemote?: () => void
   canAddRemote?: boolean
+  isGitVault?: boolean
+  onInitializeGit?: () => void
   onCreateType?: () => void
   onToggleAIChat?: () => void
+  onToggleTableOfContents?: () => void
   onCheckForUpdates?: () => void
   onRemoveActiveVault?: () => void
   onRestoreGettingStarted?: () => void
   isGettingStartedHidden?: boolean
   vaultCount?: number
+  locale?: AppLocale
+  systemLocale?: AppLocale
+  selectedUiLanguage?: UiLanguagePreference
+  onSetUiLanguage?: (language: UiLanguagePreference) => void
+  onSetThemeMode?: (mode: ThemeMode) => void
   mcpStatus?: string
   onInstallMcp?: () => void
   aiAgentsStatus?: AiAgentsStatus
@@ -87,6 +109,11 @@ interface AppCommandsConfig {
   noteListFilter?: NoteListFilter
   onSetNoteListFilter?: (filter: NoteListFilter) => void
   onOpenInNewWindow?: () => void
+  onRevealActiveFile?: (path: string) => void
+  onCopyActiveFilePath?: (path: string) => void
+  onOpenActiveFileExternal?: (path: string) => void
+  onRevealSelectedFolder?: () => void
+  onCopySelectedFolderPath?: () => void
   onToggleFavorite?: (path: string) => void
   onToggleOrganized?: (path: string) => void
   onCustomizeNoteListColumns?: () => void
@@ -107,6 +134,8 @@ type CommandRegistrySelectionState = Pick<
   | 'onSelect'
   | 'onRenameFolder'
   | 'onDeleteFolder'
+  | 'onRevealSelectedFolder'
+  | 'onCopySelectedFolderPath'
   | 'showInbox'
   | 'onGoBack'
   | 'onGoForward'
@@ -123,6 +152,9 @@ type CommandRegistryCoreActions = Pick<
   | 'onCreateNote'
   | 'onCreateNoteOfType'
   | 'onSave'
+  | 'onFindInNote'
+  | 'onReplaceInNote'
+  | 'onPastePlainText'
   | 'onOpenSettings'
   | 'onOpenFeedback'
   | 'onDeleteNote'
@@ -135,7 +167,17 @@ type CommandRegistryCoreActions = Pick<
   | 'onToggleInspector'
   | 'onToggleDiff'
   | 'onToggleRawEditor'
+  | 'selectedViewName'
+  | 'onMoveSelectedViewUp'
+  | 'onMoveSelectedViewDown'
+  | 'canMoveSelectedViewUp'
+  | 'canMoveSelectedViewDown'
+  | 'noteWidth'
+  | 'defaultNoteWidth'
+  | 'onSetNoteWidth'
+  | 'onSetDefaultNoteWidth'
   | 'onToggleAIChat'
+  | 'onToggleTableOfContents'
 >
 type CommandRegistryVaultActions = Pick<
   CommandRegistryConfig,
@@ -143,8 +185,15 @@ type CommandRegistryVaultActions = Pick<
   | 'onCreateEmptyVault'
   | 'onAddRemote'
   | 'canAddRemote'
+  | 'isGitVault'
+  | 'onInitializeGit'
   | 'onCheckForUpdates'
   | 'onCreateType'
+  | 'locale'
+  | 'systemLocale'
+  | 'selectedUiLanguage'
+  | 'onSetUiLanguage'
+  | 'onSetThemeMode'
   | 'onRemoveActiveVault'
   | 'onRestoreGettingStarted'
   | 'isGettingStartedHidden'
@@ -152,6 +201,9 @@ type CommandRegistryVaultActions = Pick<
   | 'onReloadVault'
   | 'onRepairVault'
   | 'onOpenInNewWindow'
+  | 'onRevealActiveFile'
+  | 'onCopyActiveFilePath'
+  | 'onOpenActiveFileExternal'
   | 'onRestoreDeletedNote'
   | 'canRestoreDeletedNote'
 >
@@ -192,6 +244,9 @@ function createKeyboardActions(
     onQuickOpen: config.onQuickOpen,
     onCommandPalette: config.onCommandPalette,
     onSearch: config.onSearch,
+    onFindInNote: config.onFindInNote,
+    onReplaceInNote: config.onReplaceInNote,
+    onPastePlainText: config.onPastePlainText,
     onCreateNote: config.onCreateNote,
     onSave: config.onSave,
     onOpenSettings: config.onOpenSettings,
@@ -203,6 +258,7 @@ function createKeyboardActions(
     onGoBack: config.onGoBack,
     onGoForward: config.onGoForward,
     onToggleAIChat: config.onToggleAIChat,
+    onToggleTableOfContents: config.onToggleTableOfContents,
     onToggleRawEditor: config.onToggleRawEditor,
     onToggleInspector: config.onToggleInspector,
     onToggleFavorite: config.onToggleFavorite,
@@ -242,10 +298,14 @@ function createMenuEventActionHandlers(
   | 'onZoomOut'
   | 'onZoomReset'
   | 'onDeleteNote'
+  | 'onFindInNote'
+  | 'onReplaceInNote'
+  | 'onPastePlainText'
   | 'onSearch'
   | 'onToggleRawEditor'
   | 'onToggleDiff'
   | 'onToggleAIChat'
+  | 'onToggleTableOfContents'
   | 'onToggleOrganized'
   | 'onGoBack'
   | 'onGoForward'
@@ -265,10 +325,14 @@ function createMenuEventActionHandlers(
     onZoomOut: config.onZoomOut,
     onZoomReset: config.onZoomReset,
     onDeleteNote: config.onDeleteNote,
+    onFindInNote: config.onFindInNote,
+    onReplaceInNote: config.onReplaceInNote,
+    onPastePlainText: config.onPastePlainText,
     onSearch: config.onSearch,
     onToggleRawEditor: config.onToggleRawEditor,
     onToggleDiff: config.onToggleDiff,
     onToggleAIChat: config.onToggleAIChat,
+    onToggleTableOfContents: config.onToggleTableOfContents,
     onToggleOrganized: config.onToggleOrganized,
     onGoBack: config.onGoBack,
     onGoForward: config.onGoForward,
@@ -346,6 +410,8 @@ function createCommandRegistrySelectionConfig(
     onSelect: config.onSelect,
     onRenameFolder: config.onRenameFolder,
     onDeleteFolder: config.onDeleteFolder,
+    onRevealSelectedFolder: config.onRevealSelectedFolder,
+    onCopySelectedFolderPath: config.onCopySelectedFolderPath,
     showInbox: config.showInbox,
     onGoBack: config.onGoBack,
     onGoForward: config.onGoForward,
@@ -378,7 +444,20 @@ function createCommandRegistryCoreConfig(
     onToggleInspector: config.onToggleInspector,
     onToggleDiff: config.onToggleDiff,
     onToggleRawEditor: config.onToggleRawEditor,
+    selectedViewName: config.selectedViewName,
+    onMoveSelectedViewUp: config.onMoveSelectedViewUp,
+    onMoveSelectedViewDown: config.onMoveSelectedViewDown,
+    canMoveSelectedViewUp: config.canMoveSelectedViewUp,
+    canMoveSelectedViewDown: config.canMoveSelectedViewDown,
+    onFindInNote: config.onFindInNote,
+    onReplaceInNote: config.onReplaceInNote,
+    onPastePlainText: config.onPastePlainText,
+    noteWidth: config.noteWidth,
+    defaultNoteWidth: config.defaultNoteWidth,
+    onSetNoteWidth: config.onSetNoteWidth,
+    onSetDefaultNoteWidth: config.onSetDefaultNoteWidth,
     onToggleAIChat: config.onToggleAIChat,
+    onToggleTableOfContents: config.onToggleTableOfContents,
   }
 }
 
@@ -390,8 +469,15 @@ function createCommandRegistryVaultConfig(
     onCreateEmptyVault: config.onCreateEmptyVault,
     onAddRemote: config.onAddRemote ?? requestAddRemote,
     canAddRemote: config.canAddRemote ?? true,
+    isGitVault: config.isGitVault,
+    onInitializeGit: config.onInitializeGit,
     onCheckForUpdates: config.onCheckForUpdates,
     onCreateType: config.onCreateType,
+    locale: config.locale,
+    systemLocale: config.systemLocale,
+    selectedUiLanguage: config.selectedUiLanguage,
+    onSetUiLanguage: config.onSetUiLanguage,
+    onSetThemeMode: config.onSetThemeMode,
     onRemoveActiveVault: config.onRemoveActiveVault,
     onRestoreGettingStarted: config.onRestoreGettingStarted,
     isGettingStartedHidden: config.isGettingStartedHidden,
@@ -399,6 +485,9 @@ function createCommandRegistryVaultConfig(
     onReloadVault: config.onReloadVault,
     onRepairVault: config.onRepairVault,
     onOpenInNewWindow: config.onOpenInNewWindow,
+    onRevealActiveFile: config.onRevealActiveFile,
+    onCopyActiveFilePath: config.onCopyActiveFilePath,
+    onOpenActiveFileExternal: config.onOpenActiveFileExternal,
     onRestoreDeletedNote: config.onRestoreDeletedNote,
     canRestoreDeletedNote: config.canRestoreDeletedNote,
   }

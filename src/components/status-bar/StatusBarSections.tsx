@@ -1,10 +1,13 @@
-import { Moon, Package, Settings, Sun } from 'lucide-react'
+import { BookOpen, Moon, Package, Settings, Sun } from 'lucide-react'
 import { Megaphone } from '@phosphor-icons/react'
+import type { ComponentType, MouseEventHandler } from 'react'
 import type { AiAgentId, AiAgentsStatus } from '../../lib/aiAgents'
+import type { AiModelProvider } from '../../lib/aiTargets'
 import type { VaultAiGuidanceStatus } from '../../lib/vaultAiGuidance'
 import type { ClaudeCodeStatus } from '../../hooks/useClaudeCodeStatus'
 import type { McpStatus } from '../../hooks/useMcpStatus'
 import type { ThemeMode } from '../../lib/themeMode'
+import { translate, type AppLocale, type TranslationKey } from '../../lib/i18n'
 import { useStatusBarAddRemote } from '../../hooks/useStatusBarAddRemote'
 import type { GitRemoteStatus, SyncStatus } from '../../types'
 import { rememberFeedbackDialogOpener } from '../../lib/feedbackDialogOpener'
@@ -18,27 +21,23 @@ import {
   ConflictBadge,
   ChangesBadge,
   McpBadge,
+  MissingGitBadge,
   NoRemoteBadge,
   OfflineBadge,
   PulseBadge,
   SyncBadge,
+  VaultReloadingBadge,
 } from './StatusBarBadges'
 import { ICON_STYLE, SEP_STYLE } from './styles'
 import type { VaultOption } from './types'
 import { VaultMenu } from './VaultMenu'
 import { formatShortcutDisplay } from '../../hooks/appCommandCatalog'
 
-const UPDATE_TOOLTIP = { label: 'Check for updates' } as const
-const ZOOM_RESET_TOOLTIP = {
-  label: 'Reset the zoom level',
-  shortcut: formatShortcutDisplay({ display: '⌘0' }),
-} as const
-const FEEDBACK_TOOLTIP = { label: 'Contribute to Tolaria' } as const
-const LIGHT_MODE_TOOLTIP = { label: 'Switch to light mode' } as const
-const DARK_MODE_TOOLTIP = { label: 'Switch to dark mode' } as const
-const SETTINGS_TOOLTIP = {
-  label: 'Open settings',
+const SETTINGS_SHORTCUT = {
   shortcut: formatShortcutDisplay({ display: '⌘,' }),
+} as const
+const ZOOM_RESET_SHORTCUT = {
+  shortcut: formatShortcutDisplay({ display: '⌘0' }),
 } as const
 
 interface StatusBarPrimarySectionProps {
@@ -54,7 +53,9 @@ interface StatusBarPrimarySectionProps {
   onClickPending?: () => void
   onClickPulse?: () => void
   onCommitPush?: () => void
+  onInitializeGit?: () => void
   isOffline?: boolean
+  isVaultReloading?: boolean
   isGitVault?: boolean
   syncStatus: SyncStatus
   lastSyncTime: number | null
@@ -71,10 +72,16 @@ interface StatusBarPrimarySectionProps {
   aiAgentsStatus?: AiAgentsStatus
   vaultAiGuidanceStatus?: VaultAiGuidanceStatus
   defaultAiAgent?: AiAgentId
+  defaultAiTarget?: string
+  aiModelProviders?: AiModelProvider[]
   onSetDefaultAiAgent?: (agent: AiAgentId) => void
+  onSetDefaultAiTarget?: (target: string) => void
   onRestoreVaultAiGuidance?: () => void
   claudeCodeStatus?: ClaudeCodeStatus
   claudeCodeVersion?: string | null
+  stacked?: boolean
+  compact?: boolean
+  locale?: AppLocale
 }
 
 interface StatusBarSecondarySectionProps {
@@ -84,7 +91,310 @@ interface StatusBarSecondarySectionProps {
   onZoomReset?: () => void
   onToggleThemeMode?: () => void
   onOpenFeedback?: () => void
+  onOpenDocs?: () => void
   onOpenSettings?: () => void
+  stacked?: boolean
+  compact?: boolean
+  locale?: AppLocale
+}
+
+function BuildNumberButton({
+  buildNumber,
+  onCheckForUpdates,
+  compact,
+  locale,
+}: {
+  buildNumber?: string
+  onCheckForUpdates?: () => void
+  compact: boolean
+  locale: AppLocale
+}) {
+  const className = compact
+    ? 'h-6 min-w-0 gap-1 rounded-sm px-1 py-0.5 text-[12px] font-medium text-muted-foreground hover:bg-[var(--hover)] hover:text-foreground'
+    : 'h-auto gap-1 rounded-sm px-1 py-0.5 text-[12px] font-medium text-muted-foreground hover:bg-[var(--hover)] hover:text-foreground'
+
+  return (
+    <ActionTooltip copy={{ label: translate(locale, 'status.update.check') }} side="top">
+      <Button
+        type="button"
+        variant="ghost"
+        size="xs"
+        className={className}
+        onClick={onCheckForUpdates}
+        aria-label={translate(locale, 'status.update.check')}
+        aria-disabled={onCheckForUpdates ? undefined : true}
+        data-testid="status-build-number"
+      >
+        <span style={ICON_STYLE}>
+          <Package size={13} />
+          {compact ? null : buildNumber ?? translate(locale, 'status.build.unknown')}
+        </span>
+      </Button>
+    </ActionTooltip>
+  )
+}
+
+function StatusBarAiBadge({
+  aiAgentsStatus,
+  vaultAiGuidanceStatus,
+  defaultAiAgent,
+  defaultAiTarget,
+  aiModelProviders,
+  onSetDefaultAiAgent,
+  onSetDefaultAiTarget,
+  onRestoreVaultAiGuidance,
+  claudeCodeStatus,
+  claudeCodeVersion,
+  compact,
+  locale,
+}: Pick<
+  StatusBarPrimarySectionProps,
+  | 'aiAgentsStatus'
+  | 'vaultAiGuidanceStatus'
+  | 'defaultAiAgent'
+  | 'defaultAiTarget'
+  | 'aiModelProviders'
+  | 'onSetDefaultAiAgent'
+  | 'onSetDefaultAiTarget'
+  | 'onRestoreVaultAiGuidance'
+  | 'claudeCodeStatus'
+  | 'claudeCodeVersion'
+  | 'compact'
+  | 'locale'
+>) {
+  if (aiAgentsStatus && defaultAiAgent) {
+    return (
+      <AiAgentsBadge
+        statuses={aiAgentsStatus}
+        guidanceStatus={vaultAiGuidanceStatus}
+        defaultAgent={defaultAiAgent}
+        defaultTarget={defaultAiTarget}
+        providers={aiModelProviders}
+        onSetDefaultAgent={onSetDefaultAiAgent}
+        onSetDefaultTarget={onSetDefaultAiTarget}
+        onRestoreGuidance={onRestoreVaultAiGuidance}
+        compact={compact}
+        locale={locale}
+      />
+    )
+  }
+
+  if (!claudeCodeStatus) return null
+
+  return <ClaudeCodeBadge status={claudeCodeStatus} version={claudeCodeVersion} showSeparator={!compact} compact={compact} locale={locale} />
+}
+
+function StatusBarPrimaryBadges({
+  modifiedCount,
+  visibleRemoteStatus,
+  onAddRemote,
+  onClickPending,
+  onCommitPush,
+  onInitializeGit,
+  syncStatus,
+  lastSyncTime,
+  onTriggerSync,
+  onPullAndPush,
+  onOpenConflictResolver,
+  conflictCount,
+  onClickPulse,
+  isGitVault,
+  mcpStatus,
+  onInstallMcp,
+  aiAgentsStatus,
+  vaultAiGuidanceStatus,
+  defaultAiAgent,
+  defaultAiTarget,
+  aiModelProviders,
+  onSetDefaultAiAgent,
+  onSetDefaultAiTarget,
+  onRestoreVaultAiGuidance,
+  claudeCodeStatus,
+  claudeCodeVersion,
+  isOffline,
+  isVaultReloading,
+  compact,
+  locale,
+}: {
+  modifiedCount: number
+  visibleRemoteStatus: GitRemoteStatus | null
+  onAddRemote: () => void
+  onClickPending?: () => void
+  onCommitPush?: () => void
+  onInitializeGit?: () => void
+  syncStatus: SyncStatus
+  lastSyncTime: number | null
+  onTriggerSync?: () => void
+  onPullAndPush?: () => void
+  onOpenConflictResolver?: () => void
+  conflictCount: number
+  onClickPulse?: () => void
+  isGitVault: boolean
+  mcpStatus?: McpStatus
+  onInstallMcp?: () => void
+  aiAgentsStatus?: AiAgentsStatus
+  vaultAiGuidanceStatus?: VaultAiGuidanceStatus
+  defaultAiAgent?: AiAgentId
+  defaultAiTarget?: string
+  aiModelProviders?: AiModelProvider[]
+  onSetDefaultAiAgent?: (agent: AiAgentId) => void
+  onSetDefaultAiTarget?: (target: string) => void
+  onRestoreVaultAiGuidance?: () => void
+  claudeCodeStatus?: ClaudeCodeStatus
+  claudeCodeVersion?: string | null
+  isOffline: boolean
+  isVaultReloading: boolean
+  compact: boolean
+  locale: AppLocale
+}) {
+  return (
+    <>
+      <OfflineBadge isOffline={isOffline} showSeparator={!compact} compact={compact} locale={locale} />
+      <VaultReloadingBadge isReloading={isVaultReloading} showSeparator={!compact} compact={compact} locale={locale} />
+      {isGitVault ? (
+        <>
+          <NoRemoteBadge remoteStatus={visibleRemoteStatus} onAddRemote={onAddRemote} showSeparator={!compact} compact={compact} locale={locale} />
+          <ChangesBadge count={modifiedCount} onClick={onClickPending} showSeparator={!compact} compact={compact} locale={locale} />
+          <CommitButton onClick={onCommitPush} remoteStatus={visibleRemoteStatus} showSeparator={!compact} compact={compact} locale={locale} />
+          <SyncBadge
+            status={syncStatus}
+            lastSyncTime={lastSyncTime}
+            remoteStatus={visibleRemoteStatus}
+            onTriggerSync={onTriggerSync}
+            onPullAndPush={onPullAndPush}
+            onOpenConflictResolver={onOpenConflictResolver}
+            compact={compact}
+            locale={locale}
+          />
+          <ConflictBadge count={conflictCount} onClick={onOpenConflictResolver} showSeparator={!compact} compact={compact} locale={locale} />
+          <PulseBadge onClick={onClickPulse} showSeparator={!compact} compact={compact} locale={locale} />
+        </>
+      ) : (
+        <MissingGitBadge onClick={onInitializeGit} showSeparator={!compact} compact={compact} locale={locale} />
+      )}
+      {mcpStatus && <McpBadge status={mcpStatus} onInstall={onInstallMcp} showSeparator={!compact} compact={compact} locale={locale} />}
+      <StatusBarAiBadge
+        aiAgentsStatus={aiAgentsStatus}
+        vaultAiGuidanceStatus={vaultAiGuidanceStatus}
+        defaultAiAgent={defaultAiAgent}
+        defaultAiTarget={defaultAiTarget}
+        aiModelProviders={aiModelProviders}
+        onSetDefaultAiAgent={onSetDefaultAiAgent}
+        onSetDefaultAiTarget={onSetDefaultAiTarget}
+        onRestoreVaultAiGuidance={onRestoreVaultAiGuidance}
+        claudeCodeStatus={claudeCodeStatus}
+        claudeCodeVersion={claudeCodeVersion}
+        compact={compact}
+        locale={locale}
+      />
+    </>
+  )
+}
+
+type StatusLinkButtonProps = {
+  compact: boolean
+  icon: ComponentType<{ size?: number }>
+  labelKey: TranslationKey
+  locale: AppLocale
+  onClick: MouseEventHandler<HTMLButtonElement>
+  testId: string
+  tooltipKey: TranslationKey
+}
+
+function StatusLinkButton({
+  compact,
+  icon: Icon,
+  labelKey,
+  locale,
+  onClick,
+  testId,
+  tooltipKey,
+}: StatusLinkButtonProps) {
+  const className = compact
+    ? 'h-6 w-6 rounded-sm p-0 text-muted-foreground hover:text-foreground'
+    : 'h-6 px-2 text-[12px] font-medium text-muted-foreground hover:text-foreground'
+
+  return (
+    <ActionTooltip copy={{ label: translate(locale, tooltipKey) }} side="top">
+      <Button
+        type="button"
+        variant="ghost"
+        size="xs"
+        className={className}
+        onClick={onClick}
+        aria-label={translate(locale, tooltipKey)}
+        data-testid={testId}
+      >
+        <Icon size={14} />
+        {compact ? null : translate(locale, labelKey)}
+      </Button>
+    </ActionTooltip>
+  )
+}
+
+function FeedbackButton({
+  compact,
+  locale,
+  onOpenFeedback,
+}: {
+  compact: boolean
+  locale: AppLocale
+  onOpenFeedback: () => void
+}) {
+  return (
+    <StatusLinkButton
+      compact={compact}
+      icon={Megaphone}
+      labelKey="status.feedback.label"
+      locale={locale}
+      onClick={(event) => {
+        rememberFeedbackDialogOpener(event.currentTarget)
+        onOpenFeedback()
+      }}
+      testId="status-feedback"
+      tooltipKey="status.feedback.contribute"
+    />
+  )
+}
+
+function DocsButton({
+  compact,
+  locale,
+  onOpenDocs,
+}: {
+  compact: boolean
+  locale: AppLocale
+  onOpenDocs: () => void
+}) {
+  return (
+    <StatusLinkButton
+      compact={compact}
+      icon={BookOpen}
+      labelKey="status.docs.label"
+      locale={locale}
+      onClick={onOpenDocs}
+      testId="status-docs"
+      tooltipKey="status.docs.open"
+    />
+  )
+}
+
+function primarySectionStyle(stacked: boolean, compact: boolean) {
+  return {
+    display: 'flex',
+    alignItems: 'center',
+    gap: compact ? 8 : 12,
+    rowGap: stacked ? 4 : 0,
+    flex: 1,
+    minWidth: 0,
+    width: stacked ? '100%' : 'auto',
+    flexBasis: stacked ? '100%' : 'auto',
+    flexWrap: stacked ? 'wrap' : 'nowrap',
+  } as const
+}
+
+function PrimarySeparator({ compact }: { compact: boolean }) {
+  return compact ? null : <span style={SEP_STYLE}>|</span>
 }
 
 export function StatusBarPrimarySection({
@@ -100,8 +410,10 @@ export function StatusBarPrimarySection({
   onClickPending,
   onClickPulse,
   onCommitPush,
+  onInitializeGit,
   isOffline = false,
-  isGitVault = false,
+  isVaultReloading = false,
+  isGitVault = true,
   syncStatus,
   lastSyncTime,
   conflictCount,
@@ -117,10 +429,16 @@ export function StatusBarPrimarySection({
   aiAgentsStatus,
   vaultAiGuidanceStatus,
   defaultAiAgent,
+  defaultAiTarget,
+  aiModelProviders,
   onSetDefaultAiAgent,
+  onSetDefaultAiTarget,
   onRestoreVaultAiGuidance,
   claudeCodeStatus,
   claudeCodeVersion,
+  locale = 'en',
+  stacked = false,
+  compact = false,
 }: StatusBarPrimarySectionProps) {
   const {
     openAddRemote,
@@ -136,7 +454,9 @@ export function StatusBarPrimarySection({
   })
 
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 12, flex: 1, minWidth: 0 }}>
+    <div
+      style={primarySectionStyle(stacked, compact)}
+    >
       <VaultMenu
         vaults={vaults}
         vaultPath={vaultPath}
@@ -146,56 +466,44 @@ export function StatusBarPrimarySection({
         onCloneVault={onCloneVault}
         onCloneGettingStarted={onCloneGettingStarted}
         onRemoveVault={onRemoveVault}
+        compact={compact}
+        locale={locale}
       />
-      <span style={SEP_STYLE}>|</span>
-      <ActionTooltip copy={UPDATE_TOOLTIP} side="top">
-        <Button
-          type="button"
-          variant="ghost"
-          size="xs"
-          className="h-auto gap-1 rounded-sm px-1 py-0.5 text-[11px] font-medium text-muted-foreground hover:bg-[var(--hover)] hover:text-foreground"
-          onClick={onCheckForUpdates}
-          aria-label={UPDATE_TOOLTIP.label}
-          aria-disabled={onCheckForUpdates ? undefined : true}
-          data-testid="status-build-number"
-        >
-          <span style={ICON_STYLE}>
-            <Package size={13} />
-            {buildNumber ?? 'b?'}
-          </span>
-        </Button>
-      </ActionTooltip>
-      <OfflineBadge isOffline={isOffline} />
-      <NoRemoteBadge
-        remoteStatus={visibleRemoteStatus}
+      <PrimarySeparator compact={compact} />
+      <BuildNumberButton buildNumber={buildNumber} onCheckForUpdates={onCheckForUpdates} compact={compact} locale={locale} />
+      <StatusBarPrimaryBadges
+        modifiedCount={modifiedCount}
+        visibleRemoteStatus={visibleRemoteStatus}
         onAddRemote={() => {
           void openAddRemote()
         }}
-      />
-      <ChangesBadge count={modifiedCount} onClick={onClickPending} />
-      <CommitButton onClick={onCommitPush} remoteStatus={visibleRemoteStatus} />
-      <SyncBadge
-        status={syncStatus}
+        onClickPending={onClickPending}
+        onCommitPush={onCommitPush}
+        onInitializeGit={onInitializeGit}
+        syncStatus={syncStatus}
         lastSyncTime={lastSyncTime}
-        remoteStatus={visibleRemoteStatus}
         onTriggerSync={onTriggerSync}
         onPullAndPush={onPullAndPush}
         onOpenConflictResolver={onOpenConflictResolver}
+        conflictCount={conflictCount}
+        onClickPulse={onClickPulse}
+        isGitVault={isGitVault}
+        mcpStatus={mcpStatus}
+        onInstallMcp={onInstallMcp}
+        aiAgentsStatus={aiAgentsStatus}
+        vaultAiGuidanceStatus={vaultAiGuidanceStatus}
+        defaultAiAgent={defaultAiAgent}
+        defaultAiTarget={defaultAiTarget}
+        aiModelProviders={aiModelProviders}
+        onSetDefaultAiAgent={onSetDefaultAiAgent}
+        onSetDefaultAiTarget={onSetDefaultAiTarget}
+        onRestoreVaultAiGuidance={onRestoreVaultAiGuidance}
+        claudeCodeStatus={claudeCodeStatus}
+        claudeCodeVersion={claudeCodeVersion}
+        isOffline={isOffline} isVaultReloading={isVaultReloading}
+        compact={compact}
+        locale={locale}
       />
-      <ConflictBadge count={conflictCount} onClick={onOpenConflictResolver} />
-      <PulseBadge onClick={onClickPulse} disabled={isGitVault === false} />
-      {mcpStatus && <McpBadge status={mcpStatus} onInstall={onInstallMcp} />}
-      {aiAgentsStatus && defaultAiAgent
-        ? (
-          <AiAgentsBadge
-            statuses={aiAgentsStatus}
-            guidanceStatus={vaultAiGuidanceStatus}
-            defaultAgent={defaultAiAgent}
-            onSetDefaultAgent={onSetDefaultAiAgent}
-            onRestoreGuidance={onRestoreVaultAiGuidance}
-          />
-        )
-        : claudeCodeStatus && <ClaudeCodeBadge status={claudeCodeStatus} version={claudeCodeVersion} />}
       <AddRemoteModal
         open={showAddRemote}
         vaultPath={vaultPath}
@@ -213,49 +521,47 @@ export function StatusBarSecondarySection({
   onZoomReset,
   onToggleThemeMode,
   onOpenFeedback,
+  onOpenDocs,
   onOpenSettings,
+  locale = 'en',
+  stacked = false,
+  compact = false,
 }: StatusBarSecondarySectionProps) {
   void noteCount
   const ThemeIcon = themeMode === 'dark' ? Sun : Moon
-  const themeTooltip = themeMode === 'dark' ? LIGHT_MODE_TOOLTIP : DARK_MODE_TOOLTIP
+  const themeTooltip = {
+    label: translate(locale, themeMode === 'dark' ? 'status.theme.light' : 'status.theme.dark'),
+  }
 
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: stacked ? 'flex-end' : 'flex-start',
+        gap: compact ? 8 : 12,
+        flexShrink: 0,
+        width: stacked ? '100%' : 'auto',
+      }}
+    >
       {zoomLevel === 100 ? null : (
-        <ActionTooltip copy={ZOOM_RESET_TOOLTIP} side="top">
+        <ActionTooltip copy={{ label: translate(locale, 'status.zoom.reset'), ...ZOOM_RESET_SHORTCUT }} side="top">
           <Button
             type="button"
             variant="ghost"
             size="xs"
-            className="h-auto rounded-sm px-1 py-0.5 text-[11px] font-medium text-muted-foreground hover:bg-[var(--hover)] hover:text-foreground"
+            className="h-auto rounded-sm px-1 py-0.5 text-[12px] font-medium text-muted-foreground hover:bg-[var(--hover)] hover:text-foreground"
             onClick={onZoomReset}
-            aria-label={ZOOM_RESET_TOOLTIP.label}
+            aria-label={translate(locale, 'status.zoom.reset')}
             data-testid="status-zoom"
           >
             <span style={ICON_STYLE}>{zoomLevel}%</span>
           </Button>
         </ActionTooltip>
       )}
-      {onOpenFeedback && (
-        <ActionTooltip copy={FEEDBACK_TOOLTIP} side="top">
-          <Button
-            type="button"
-            variant="ghost"
-            size="xs"
-            className="h-6 px-2 text-[11px] font-medium text-muted-foreground hover:text-foreground"
-            onClick={(event) => {
-              rememberFeedbackDialogOpener(event.currentTarget)
-              onOpenFeedback()
-            }}
-            aria-label={FEEDBACK_TOOLTIP.label}
-            data-testid="status-feedback"
-          >
-            <Megaphone size={14} />
-            Contribute
-          </Button>
-        </ActionTooltip>
-      )}
-      <ActionTooltip copy={themeTooltip} side="top">
+      {onOpenFeedback && <FeedbackButton compact={compact} locale={locale} onOpenFeedback={onOpenFeedback} />}
+      {onOpenDocs && <DocsButton compact={compact} locale={locale} onOpenDocs={onOpenDocs} />}
+      <ActionTooltip copy={themeTooltip} side="top" align="end" contentTestId="status-theme-mode-tooltip">
         <Button
           type="button"
           variant="ghost"
@@ -269,14 +575,14 @@ export function StatusBarSecondarySection({
           <ThemeIcon size={14} />
         </Button>
       </ActionTooltip>
-      <ActionTooltip copy={SETTINGS_TOOLTIP} side="top" align="end">
+      <ActionTooltip copy={{ label: translate(locale, 'status.settings.open'), ...SETTINGS_SHORTCUT }} side="top" align="end">
         <Button
           type="button"
           variant="ghost"
           size="icon-xs"
           className="text-muted-foreground hover:bg-[var(--hover)] hover:text-foreground"
           onClick={onOpenSettings}
-          aria-label={SETTINGS_TOOLTIP.label}
+          aria-label={translate(locale, 'status.settings.open')}
           data-testid="status-settings"
         >
           <Settings size={14} />

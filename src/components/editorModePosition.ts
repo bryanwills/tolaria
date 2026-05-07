@@ -1,8 +1,11 @@
 import { compactMarkdown } from '../utils/compact-markdown'
 import { restoreWikilinksInBlocks, splitFrontmatter } from '../utils/wikilinks'
+import { serializeDurableEditorBlocks } from '../utils/editorDurableMarkdown'
+import { findNearestTextCursorBlockById } from './blockNoteCursorTarget'
 
 interface BlockLike {
   id: string
+  content?: unknown
 }
 
 interface BlockSelectionLike {
@@ -78,6 +81,10 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max)
 }
 
+function clampSelectionOffset(value: number, maxOffset: number): number {
+  return Number.isFinite(value) ? clamp(value, 0, maxOffset) : 0
+}
+
 function countLines({ text }: { text: string }): number {
   return text.length === 0 ? 1 : text.split('\n').length
 }
@@ -126,11 +133,11 @@ function getLineIndexFromRatio({ totalLines, ratio }: { totalLines: number; rati
 }
 
 function serializeBlock(editor: BlockNotePositionEditor, block: BlockLike): string {
-  return compactMarkdown(editor.blocksToMarkdownLossy(restoreWikilinksInBlocks([block])))
+  return compactMarkdown(serializeDurableEditorBlocks(editor, restoreWikilinksInBlocks([block])))
 }
 
 function serializeEditorBody(editor: BlockNotePositionEditor): string {
-  return compactMarkdown(editor.blocksToMarkdownLossy(restoreWikilinksInBlocks(editor.document)))
+  return compactMarkdown(serializeDurableEditorBlocks(editor, restoreWikilinksInBlocks(editor.document)))
 }
 
 function buildBlockLineRanges({
@@ -234,9 +241,19 @@ function buildBlockNoteRestoreState(
   const headIndex = findNearestBlockIndex({ ranges, targetLine: headLine })
   const startIndex = Math.min(anchorIndex, headIndex)
   const endIndex = Math.max(anchorIndex, headIndex)
+  const startBlockId = findNearestTextCursorBlockById(
+    editor.document,
+    editor.document[startIndex].id,
+  )?.id
+  const endBlockId = findNearestTextCursorBlockById(
+    editor.document,
+    editor.document[endIndex].id,
+  )?.id
+  if (!startBlockId || !endBlockId) return null
+
   return {
-    startBlockId: editor.document[startIndex].id,
-    endBlockId: editor.document[endIndex].id,
+    startBlockId,
+    endBlockId,
   }
 }
 
@@ -323,7 +340,17 @@ export function restoreCodeMirrorView(
   const view = getRawEditorView(documentObject)
   if (!view) return false
 
-  view.dispatch({ selection: { anchor: state.anchor, head: state.head } })
+  const maxOffset = view.state.doc.toString().length
+  const selection = {
+    anchor: clampSelectionOffset(state.anchor, maxOffset),
+    head: clampSelectionOffset(state.head, maxOffset),
+  }
+
+  try {
+    view.dispatch({ selection })
+  } catch {
+    return false
+  }
   view.scrollDOM.scrollTop = state.scrollTop
   view.focus()
   return true
@@ -337,10 +364,14 @@ export function restoreBlockNoteView(
   const state = buildBlockNoteRestoreState(editor, snapshot)
   if (!state) return false
 
-  if (state.startBlockId === state.endBlockId) {
-    editor.setTextCursorPosition(state.endBlockId, 'end')
-  } else {
-    editor.setSelection(state.startBlockId, state.endBlockId)
+  try {
+    if (state.startBlockId === state.endBlockId) {
+      editor.setTextCursorPosition(state.endBlockId, 'end')
+    } else {
+      editor.setSelection(state.startBlockId, state.endBlockId)
+    }
+  } catch {
+    return false
   }
   editor.focus()
   documentObject

@@ -1,7 +1,18 @@
 /// <reference types="vitest/config" />
 import type { IncomingMessage, ServerResponse } from 'http'
 import path from 'path'
-import fs from 'fs'
+import {
+  closeSync,
+  fstatSync,
+  mkdirSync,
+  openSync,
+  opendirSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+  type Dirent,
+} from 'fs'
 import os from 'os'
 import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
@@ -48,18 +59,51 @@ function extractWikiLinks(value: string): string[] {
 
 /** Extract wiki-links from a frontmatter value (string or array of strings). */
 function wikiLinksFromValue(value: unknown): string[] {
-  if (typeof value === 'string') return extractWikiLinks(value)
-  if (Array.isArray(value)) {
-    return value.flatMap((v) => (typeof v === 'string' ? extractWikiLinks(v) : []))
-  }
-  return []
+  return collectWikiLinksFromValue(value, 0)
 }
 
-// Frontmatter keys that map to dedicated VaultEntry fields (skip in generic relationships)
+function collectWikiLinksFromValue(value: unknown, depth: number): string[] {
+  if (typeof value === 'string') return extractWikiLinks(value)
+  if (!Array.isArray(value)) return []
+
+  const nestedLink = nestedFlowWikilink(value, depth)
+  if (nestedLink) return [nestedLink]
+  return value.flatMap((item) => collectWikiLinksFromValue(item, depth + 1))
+}
+
+function nestedFlowWikilink(value: unknown[], depth: number): string | null {
+  if (depth === 0 || value.length !== 1 || typeof value[0] !== 'string') return null
+  return extractWikiLinks(value[0]).length === 0 ? `[[${value[0]}]]` : null
+}
+
+// Frontmatter keys that map to dedicated VaultEntry fields (skip in generic properties/relationships)
 const DEDICATED_KEYS = new Set([
-  'aliases', 'is_a', 'is a', 'belongs_to', 'belongs to',
-  'related_to', 'related to', 'status', 'title',
-])
+  'aliases', 'is_a', 'is a', 'type', 'status', 'title', '_archived',
+  'archived', '_icon', 'icon', 'color', '_order', 'order',
+  '_sidebar_label', 'sidebar_label', 'sidebar label', 'template',
+  '_sort', 'sort', 'view', '_width', 'width', 'visible',
+  '_organized', '_favorite', '_favorite_index', '_list_properties_display',
+].map((key) => key.toLowerCase()))
+
+type FrontmatterPropertyValue = string | number | boolean | null
+type VaultSearchResult = { title: string; path: string; snippet: string; score: number; note_type: string | null }
+
+interface SearchEntryInput {
+  entry: VaultEntry
+  query: string
+  rawContent: string
+}
+
+interface SearchRequestInput {
+  query: string
+  vaultPath: string
+}
+
+interface SearchResponseInput {
+  mode: string
+  query: string
+  results: VaultSearchResult[]
+}
 
 function getFrontmatterValue(
   frontmatter: Record<string, unknown>,
@@ -95,6 +139,68 @@ const devServerWatchIgnored = [
   '**/dist/**',
   '**/src-tauri/target/**',
 ]
+
+function readUtf8File(filePath: string): string {
+  const fd = openSync(filePath, 'r')
+  try {
+    return readFileSync(fd, 'utf-8')
+  } finally {
+    closeSync(fd)
+  }
+}
+
+function writeUtf8File(filePath: string, content: string): void {
+  const fd = openSync(filePath, 'w')
+  try {
+    writeFileSync(fd, content, 'utf-8')
+  } finally {
+    closeSync(fd)
+  }
+}
+
+function pathStats(filePath: string) {
+  const fd = openSync(filePath, 'r')
+  try {
+    return fstatSync(fd)
+  } finally {
+    closeSync(fd)
+  }
+}
+
+function pathExists(filePath: string): boolean {
+  try {
+    pathStats(filePath)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function directoryEntries(dir: string): Dirent[] {
+  const directory = opendirSync(dir)
+  try {
+    const entries: Dirent[] = []
+    let entry = directory.readSync()
+    while (entry) {
+      entries.push(entry)
+      entry = directory.readSync()
+    }
+    return entries
+  } finally {
+    directory.closeSync()
+  }
+}
+
+function isInsideRelativePath(relative: string): boolean {
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
+}
+
+function resolveInside(root: string, target: string): string | null {
+  const normalizedTarget = path.normalize(target)
+  if (path.isAbsolute(normalizedTarget)) return null
+  const candidate = path.normalize(`${root}${path.sep}${normalizedTarget}`)
+  return isInsideRelativePath(path.relative(root, candidate)) ? candidate : null
+}
 
 function frontmatterString(frontmatter: Record<string, unknown>, ...keys: string[]): string | null {
   const value = getFrontmatterValue(frontmatter, keys)
@@ -138,10 +244,42 @@ function frontmatterRelationships(frontmatter: Record<string, unknown>): Record<
   return relationships
 }
 
+function frontmatterProperties(frontmatter: Record<string, unknown>): Record<string, FrontmatterPropertyValue> {
+  const properties: Record<string, FrontmatterPropertyValue> = {}
+  for (const [key, value] of Object.entries(frontmatter)) {
+    if (DEDICATED_KEYS.has(key.toLowerCase()) || key.trim().startsWith('_')) continue
+    const propertyValue = frontmatterPropertyValue(value)
+    if (propertyValue !== undefined) properties[key] = propertyValue
+  }
+  return properties
+}
+
+function isScalarFrontmatterProperty(value: unknown): value is number | boolean {
+  return typeof value === 'number' || typeof value === 'boolean'
+}
+
+function singleStringArrayValue(value: unknown): string | undefined {
+  if (!Array.isArray(value)) return undefined
+  if (value.length !== 1) return undefined
+  return typeof value[0] === 'string' ? value[0] : undefined
+}
+
+function wikiLinkFreeString(value: string): string | undefined {
+  return extractWikiLinks(value).length === 0 ? value : undefined
+}
+
+function frontmatterPropertyValue(value: unknown): FrontmatterPropertyValue | undefined {
+  if (value === null) return null
+  if (isScalarFrontmatterProperty(value)) return value
+  if (typeof value === 'string') return wikiLinkFreeString(value)
+  const singleArrayValue = singleStringArrayValue(value)
+  return singleArrayValue === undefined ? undefined : wikiLinkFreeString(singleArrayValue)
+}
+
 function parseMarkdownFile(filePath: string): VaultEntry | null {
   try {
-    const raw = fs.readFileSync(filePath, 'utf-8')
-    const stats = fs.statSync(filePath)
+    const raw = readUtf8File(filePath)
+    const stats = pathStats(filePath)
     const { data, content } = matter(raw)
     const fm = data as Record<string, unknown>
 
@@ -179,7 +317,7 @@ function parseMarkdownFile(filePath: string): VaultEntry | null {
       view: frontmatterString(fm, 'view'),
       visible: frontmatterBool(fm, 'visible'),
       outgoingLinks: [],
-      properties: {},
+      properties: frontmatterProperties(fm),
     }
   } catch {
     return null
@@ -190,10 +328,11 @@ function parseMarkdownFile(filePath: string): VaultEntry | null {
 function findMarkdownFiles(dir: string): string[] {
   const results: string[] = []
   try {
-    const items = fs.readdirSync(dir, { withFileTypes: true })
+    const items = directoryEntries(dir)
     for (const item of items) {
       if (item.name.startsWith('.')) continue
-      const full = path.join(dir, item.name)
+      const full = resolveInside(dir, item.name)
+      if (!full) continue
       if (item.isDirectory()) {
         results.push(...findMarkdownFiles(full))
       } else if (item.name.endsWith('.md')) {
@@ -214,7 +353,7 @@ function sendJson(res: ServerResponse, payload: unknown, statusCode = 200): void
 
 function readExistingQueryPath(url: URL, res: ServerResponse, key: string): string | null {
   const filePath = url.searchParams.get(key)
-  if (!filePath || !fs.existsSync(filePath)) {
+  if (!filePath || !pathExists(filePath)) {
     sendJson(res, { error: 'Invalid or missing path' }, 400)
     return null
   }
@@ -236,18 +375,18 @@ function collectLegacyWikilinkTargets(oldTitle: string, oldPath: string, vaultPa
 function updateWikilinksForTargets(vaultPath: string, oldTargets: string[], newTarget: string, excludePath: string): number {
   if (oldTargets.length === 0) return 0
   const allFiles = findMarkdownFiles(vaultPath)
-  const escaped = oldTargets.map(target => target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-  const pattern = new RegExp(`\\[\\[(?:${escaped.join('|')})(\\|[^\\]]*?)?\\]\\]`, 'g')
+  const targets = new Set(oldTargets)
   let updatedFiles = 0
   for (const filePath of allFiles) {
     if (filePath === excludePath) continue
     try {
-      const content = fs.readFileSync(filePath, 'utf-8')
-      const replaced = content.replace(pattern, (_m: string, pipe: string | undefined) =>
-        pipe ? `[[${newTarget}${pipe}]]` : `[[${newTarget}]]`
-      )
+      const content = readUtf8File(filePath)
+      const replaced = content.replace(/\[\[([^\]|]+)(\|[^\]]*)?\]\]/g, (match: string, target: string, pipe: string | undefined) => {
+        if (!targets.has(target)) return match
+        return pipe ? `[[${newTarget}${pipe}]]` : `[[${newTarget}]]`
+      })
       if (replaced !== content) {
-        fs.writeFileSync(filePath, replaced, 'utf-8')
+        writeUtf8File(filePath, replaced)
         updatedFiles++
       }
     } catch {
@@ -282,7 +421,7 @@ function handleVaultContent(url: URL, res: ServerResponse): boolean {
   if (url.pathname !== '/api/vault/content') return false
   const filePath = readExistingQueryPath(url, res, 'path')
   if (!filePath) return true
-  sendJson(res, { content: fs.readFileSync(filePath, 'utf-8') })
+  sendJson(res, { content: readUtf8File(filePath) })
   return true
 }
 
@@ -293,7 +432,7 @@ function handleVaultAllContent(url: URL, res: ServerResponse): boolean {
   const contentMap: Record<string, string> = {}
   for (const filePath of findMarkdownFiles(dirPath)) {
     try {
-      contentMap[filePath] = fs.readFileSync(filePath, 'utf-8')
+      contentMap[filePath] = readUtf8File(filePath)
     } catch {
       // Skip unreadable files.
     }
@@ -316,61 +455,93 @@ function handleVaultSearch(url: URL, res: ServerResponse): boolean {
   const query = (url.searchParams.get('query') ?? '').toLowerCase()
   const mode = url.searchParams.get('mode') ?? 'all'
   if (!vaultPath || !query) {
-    sendJson(res, { results: [], elapsed_ms: 0, query, mode })
+    sendVaultSearchResponse(res, { results: [], query, mode })
     return true
   }
 
-  const results: { title: string; path: string; snippet: string; score: number; note_type: string | null }[] = []
+  sendVaultSearchResponse(res, {
+    results: collectVaultSearchResults({ vaultPath, query }),
+    query,
+    mode,
+  })
+  return true
+}
+
+function collectVaultSearchResults({ vaultPath, query }: SearchRequestInput): VaultSearchResult[] {
+  const results: VaultSearchResult[] = []
   for (const filePath of findMarkdownFiles(vaultPath)) {
     const entry = parseMarkdownFile(filePath)
     if (!entry || entry.trashed) continue
-    const raw = fs.readFileSync(filePath, 'utf-8')
-    if (entry.title.toLowerCase().includes(query) || raw.toLowerCase().includes(query)) {
-      results.push({ title: entry.title, path: entry.path, snippet: entry.snippet, score: 1.0, note_type: entry.isA })
-    }
+    const rawContent = readUtf8File(filePath)
+    if (entryMatchesSearch({ entry, rawContent, query })) results.push(searchResultFromEntry(entry))
   }
-  sendJson(res, { results: results.slice(0, 20), elapsed_ms: 1, query, mode })
-  return true
+  return results.slice(0, 20)
+}
+
+function entryMatchesSearch({ entry, rawContent, query }: SearchEntryInput): boolean {
+  return entry.title.toLowerCase().includes(query) || rawContent.toLowerCase().includes(query)
+}
+
+function searchResultFromEntry(entry: VaultEntry): VaultSearchResult {
+  return { title: entry.title, path: entry.path, snippet: entry.snippet, score: 1.0, note_type: entry.isA }
+}
+
+function sendVaultSearchResponse(res: ServerResponse, { results, query, mode }: SearchResponseInput): void {
+  sendJson(res, { results, elapsed_ms: results.length > 0 ? 1 : 0, query, mode })
 }
 
 async function handleVaultSave(url: URL, req: IncomingMessage, res: ServerResponse): Promise<boolean> {
-  if (url.pathname !== '/api/vault/save' || req.method !== 'POST') return false
+  if (!isPostRoute(url, req, '/api/vault/save')) return false
   try {
-    const body = await readRequestBody(req)
-    const { path: filePath, content } = JSON.parse(body)
-    if (!filePath || content === undefined) {
-      sendJson(res, { error: 'Missing path or content' }, 400)
-      return true
-    }
-    fs.mkdirSync(path.dirname(filePath), { recursive: true })
-    fs.writeFileSync(filePath, content, 'utf-8')
-    sendJson(res, null)
+    await saveVaultContent(req, res)
   } catch (err: unknown) {
-    sendJson(res, { error: err instanceof Error ? err.message : 'Save failed' }, 500)
+    sendCaughtError(res, err, 'Save failed')
   }
   return true
 }
 
+async function saveVaultContent(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const { path: filePath, content } = await readJsonBody<{ path?: string; content?: string }>(req)
+  if (!filePath || content === undefined) {
+    sendJson(res, { error: 'Missing path or content' }, 400)
+    return
+  }
+
+  mkdirSync(path.dirname(filePath), { recursive: true })
+  writeUtf8File(filePath, content)
+  sendJson(res, null)
+}
+
 async function handleVaultRename(url: URL, req: IncomingMessage, res: ServerResponse): Promise<boolean> {
-  if (url.pathname !== '/api/vault/rename' || req.method !== 'POST') return false
+  if (!isPostRoute(url, req, '/api/vault/rename')) return false
   try {
-    const body = await readRequestBody(req)
-    const { vault_path: vaultPath, old_path: oldPath, new_title: newTitle } = JSON.parse(body)
-    const oldContent = fs.readFileSync(oldPath, 'utf-8')
-    const oldTitle = oldContent.match(/^# (.+)$/m)?.[1]?.trim() ?? ''
-    const slug = newTitle.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')
-    const newPath = path.join(path.dirname(oldPath), `${slug}.md`)
-    const newContent = oldContent.replace(/^# .+$/m, `# ${newTitle}`)
-
-    fs.writeFileSync(newPath, newContent, 'utf-8')
-    if (newPath !== oldPath) fs.unlinkSync(oldPath)
-
-    const updatedFiles = vaultPath ? updateTitleWikilinks(vaultPath, oldTitle, newTitle, newPath) : 0
-    sendJson(res, { new_path: newPath, updated_files: updatedFiles })
+    await renameVaultNoteTitle(req, res)
   } catch (err: unknown) {
-    sendJson(res, { error: err instanceof Error ? err.message : 'Rename failed' }, 500)
+    sendCaughtError(res, err, 'Rename failed')
   }
   return true
+}
+
+async function renameVaultNoteTitle(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const {
+    vault_path: vaultPath,
+    old_path: oldPath,
+    new_title: newTitle,
+  } = await readJsonBody<{ vault_path?: string; old_path: string; new_title: string }>(req)
+  const oldContent = readUtf8File(oldPath)
+  const oldTitle = oldContent.match(/^# (.+)$/m)?.[1]?.trim() ?? ''
+  const slug = newTitle.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')
+  const newPath = markdownSiblingPath(oldPath, slug)
+  if (!newPath) {
+    sendJson(res, { error: 'Invalid title' }, 400)
+    return
+  }
+
+  writeUtf8File(newPath, oldContent.replace(/^# .+$/m, `# ${newTitle}`))
+  if (newPath !== oldPath) unlinkSync(oldPath)
+
+  const updatedFiles = vaultPath ? updateTitleWikilinks(vaultPath, oldTitle, newTitle, newPath) : 0
+  sendJson(res, { new_path: newPath, updated_files: updatedFiles })
 }
 
 type FilenameStemValidation =
@@ -388,35 +559,47 @@ function isUnsafeMarkdownFilenameStem(stem: string): boolean {
   return stem === '.' || stem === '..' || stem.includes('/') || stem.includes('\\')
 }
 
+function markdownSiblingPath(filePath: string, stem: string): string | null {
+  if (isUnsafeMarkdownFilenameStem(stem)) return null
+  return resolveInside(path.dirname(filePath), `${stem}.md`)
+}
+
 async function handleVaultRenameFilename(url: URL, req: IncomingMessage, res: ServerResponse): Promise<boolean> {
-  if (url.pathname !== '/api/vault/rename-filename' || req.method !== 'POST') return false
+  if (!isPostRoute(url, req, '/api/vault/rename-filename')) return false
   try {
-    const body = await readRequestBody(req)
-    const {
-      vault_path: vaultPath,
-      old_path: oldPath,
-      new_filename_stem: newFilenameStem,
-    } = JSON.parse(body)
-    const filename = validateMarkdownFilenameStem(newFilenameStem)
-    if (!filename.ok) {
-      sendJson(res, { error: filename.error }, 400)
-      return true
-    }
-
-    const newPath = path.join(path.dirname(oldPath), `${filename.stem}.md`)
-    const oldTitle = parseMarkdownFile(oldPath)?.title ?? path.basename(oldPath, '.md')
-    if (newPath !== oldPath && fs.existsSync(newPath)) {
-      sendJson(res, { error: 'A note with that name already exists' }, 409)
-      return true
-    }
-
-    fs.renameSync(oldPath, newPath)
-    const updatedFiles = vaultPath ? updatePathWikilinks(vaultPath, oldPath, newPath, oldTitle) : 0
-    sendJson(res, { new_path: newPath, updated_files: updatedFiles })
+    await renameVaultNoteFilename(req, res)
   } catch (err: unknown) {
-    sendJson(res, { error: err instanceof Error ? err.message : 'Rename failed' }, 500)
+    sendCaughtError(res, err, 'Rename failed')
   }
   return true
+}
+
+async function renameVaultNoteFilename(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const {
+    vault_path: vaultPath,
+    old_path: oldPath,
+    new_filename_stem: newFilenameStem,
+  } = await readJsonBody<{ vault_path?: string; old_path: string; new_filename_stem: string }>(req)
+  const filename = validateMarkdownFilenameStem(newFilenameStem)
+  if (!filename.ok) {
+    sendJson(res, { error: filename.error }, 400)
+    return
+  }
+
+  const newPath = markdownSiblingPath(oldPath, filename.stem)
+  if (!newPath) {
+    sendJson(res, { error: 'Invalid filename' }, 400)
+    return
+  }
+  if (newPath !== oldPath && pathExists(newPath)) {
+    sendJson(res, { error: 'A note with that name already exists' }, 409)
+    return
+  }
+
+  const oldTitle = parseMarkdownFile(oldPath)?.title ?? path.basename(oldPath, '.md')
+  renameSync(oldPath, newPath)
+  const updatedFiles = vaultPath ? updatePathWikilinks(vaultPath, oldPath, newPath, oldTitle) : 0
+  sendJson(res, { new_path: newPath, updated_files: updatedFiles })
 }
 
 async function handleVaultDelete(url: URL, req: IncomingMessage, res: ServerResponse): Promise<boolean> {
@@ -428,7 +611,7 @@ async function handleVaultDelete(url: URL, req: IncomingMessage, res: ServerResp
       sendJson(res, { error: 'Missing path' }, 400)
       return true
     }
-    fs.unlinkSync(filePath)
+    unlinkSync(filePath)
     sendJson(res, filePath)
   } catch (err: unknown) {
     sendJson(res, { error: err instanceof Error ? err.message : 'Delete failed' }, 500)
@@ -478,6 +661,18 @@ function readRequestBody(req: IncomingMessage): Promise<string> {
     req.on('data', (chunk: Buffer) => { body += chunk.toString() })
     req.on('end', () => resolve(body))
   })
+}
+
+async function readJsonBody<T>(req: IncomingMessage): Promise<T> {
+  return JSON.parse(await readRequestBody(req)) as T
+}
+
+function isPostRoute(url: URL, req: IncomingMessage, pathname: string): boolean {
+  return url.pathname === pathname && req.method === 'POST'
+}
+
+function sendCaughtError(res: ServerResponse, err: unknown, fallback: string): void {
+  sendJson(res, { error: err instanceof Error ? err.message : fallback }, 500)
 }
 
 /** WebSocket proxy info endpoint — tells the frontend where the MCP bridge is */

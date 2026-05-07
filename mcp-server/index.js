@@ -2,9 +2,8 @@
 /**
  * Tolaria MCP Server — lightweight vault tools for AI agents.
  *
- * The agent has full shell access (bash, read, write, edit).
- * These MCP tools provide Tolaria-specific capabilities that
- * native tools cannot replace:
+ * These MCP tools provide Tolaria-specific capabilities alongside each
+ * app-managed agent's own Safe / Power User permission profile:
  *
  *   - search_notes: full-text search across vault notes
  *   - get_vault_context: vault structure overview (types, note count, folders)
@@ -21,35 +20,78 @@ import {
 } from '@modelcontextprotocol/sdk/types.js'
 import WebSocket from 'ws'
 import { searchNotes, getNote, vaultContext } from './vault.js'
+import { requireVaultPath } from './vault-path.js'
 
-const VAULT_PATH = process.env.VAULT_PATH || process.env.HOME + '/Laputa'
+const VAULT_PATH = requireVaultPath()
 const WS_UI_PORT = parseInt(process.env.WS_UI_PORT || '9711', 10)
 const WS_UI_URL = `ws://localhost:${WS_UI_PORT}`
 
 // Connect as a WebSocket CLIENT to the UI bridge (run by ws-bridge.js).
 // The bridge relays messages to all other clients (the React frontend).
 let uiSocket = null
+let reconnectTimer = null
+let shutdownStarted = false
 const RECONNECT_INTERVAL_MS = 3000
 
 function connectUiBridge() {
+  if (shutdownStarted) return
+
   try {
     const ws = new WebSocket(WS_UI_URL)
+    uiSocket = ws
     ws.on('open', () => {
-      uiSocket = ws
+      if (shutdownStarted) {
+        closeUiSocket()
+        return
+      }
       console.error(`[mcp] Connected to UI bridge at ${WS_UI_URL}`)
     })
     ws.on('close', () => {
-      uiSocket = null
-      setTimeout(connectUiBridge, RECONNECT_INTERVAL_MS)
+      if (uiSocket === ws) uiSocket = null
+      scheduleUiReconnect()
     })
     ws.on('error', () => {
       // Silent — bridge may not be running yet, will retry
     })
   } catch {
-    setTimeout(connectUiBridge, RECONNECT_INTERVAL_MS)
+    scheduleUiReconnect()
   }
 }
-connectUiBridge()
+
+function scheduleUiReconnect() {
+  if (shutdownStarted) return
+
+  clearUiReconnectTimer()
+  reconnectTimer = setTimeout(connectUiBridge, RECONNECT_INTERVAL_MS)
+  reconnectTimer.unref?.()
+}
+
+function clearUiReconnectTimer() {
+  if (!reconnectTimer) return
+
+  clearTimeout(reconnectTimer)
+  reconnectTimer = null
+}
+
+function closeUiSocket() {
+  const socket = uiSocket
+  uiSocket = null
+  if (!socket) return
+
+  socket.removeAllListeners()
+  socket.on('error', () => {})
+  if (socket.readyState === WebSocket.CONNECTING) {
+    socket.terminate?.()
+    return
+  }
+
+  try {
+    socket.close()
+  } catch {
+    // Ignore close races during process teardown.
+  }
+  socket.terminate?.()
+}
 
 function broadcastUiAction(action, payload) {
   if (!uiSocket || uiSocket.readyState !== WebSocket.OPEN) return
@@ -120,15 +162,6 @@ const TOOLS = [
   },
 ]
 
-const TOOL_HANDLERS = {
-  search_notes: handleSearchNotes,
-  get_vault_context: handleVaultContext,
-  get_note: handleGetNote,
-  open_note: handleOpenNote,
-  highlight_editor: handleHighlightEditor,
-  refresh_vault: handleRefreshVault,
-}
-
 async function handleSearchNotes(args) {
   const results = await searchNotes(VAULT_PATH, args.query, args.limit)
   const text = results.length === 0
@@ -165,6 +198,25 @@ function handleRefreshVault(args) {
   return { content: [{ type: 'text', text: 'Vault refresh triggered' }] }
 }
 
+function callToolHandler(name, args) {
+  switch (name) {
+    case 'search_notes':
+      return handleSearchNotes(args)
+    case 'get_vault_context':
+      return handleVaultContext()
+    case 'get_note':
+      return handleGetNote(args)
+    case 'open_note':
+      return handleOpenNote(args)
+    case 'highlight_editor':
+      return handleHighlightEditor(args)
+    case 'refresh_vault':
+      return handleRefreshVault(args)
+    default:
+      throw new Error(`Unknown tool: ${name}`)
+  }
+}
+
 // --- Server setup ---
 
 const server = new Server(
@@ -178,12 +230,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params
-  const handler = TOOL_HANDLERS[name]
-  if (!handler) {
-    throw new Error(`Unknown tool: ${name}`)
-  }
   try {
-    return await handler(args)
+    return await callToolHandler(name, args)
   } catch (error) {
     return {
       content: [{ type: 'text', text: `Error: ${error.message}` }],
@@ -192,10 +240,47 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 })
 
+async function shutdown(exitCode = 0) {
+  if (shutdownStarted) return
+
+  shutdownStarted = true
+  clearUiReconnectTimer()
+  closeUiSocket()
+
+  try {
+    await server.close()
+  } catch (error) {
+    console.error(`[mcp] Error while closing server: ${error.message}`)
+  }
+
+  process.exitCode = exitCode
+  setImmediate(() => process.exit(exitCode))
+}
+
 async function main() {
   const transport = new StdioServerTransport()
+  server.onclose = () => {
+    void shutdown(0)
+  }
+  process.stdin.once('end', () => {
+    void shutdown(0)
+  })
+  process.stdin.once('close', () => {
+    void shutdown(0)
+  })
+  process.once('SIGINT', () => {
+    void shutdown(0)
+  })
+  process.once('SIGTERM', () => {
+    void shutdown(0)
+  })
+
+  connectUiBridge()
   await server.connect(transport)
   console.error(`Tolaria MCP server running (vault: ${VAULT_PATH})`)
 }
 
-main().catch(console.error)
+main().catch((error) => {
+  console.error(error)
+  void shutdown(1)
+})

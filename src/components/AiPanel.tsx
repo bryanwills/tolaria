@@ -5,7 +5,14 @@ import {
   AiPanelHeader,
   AiPanelMessageHistory,
 } from './AiPanelChrome'
-import { DEFAULT_AI_AGENT, getAiAgentDefinition, type AiAgentId } from '../lib/aiAgents'
+import {
+  DEFAULT_AI_AGENT,
+  getAiAgentDefinition,
+  type AiAgentId,
+  type AiAgentReadiness,
+} from '../lib/aiAgents'
+import type { AiTarget } from '../lib/aiTargets'
+import type { AppLocale } from '../lib/i18n'
 import { type NoteListItem } from '../utils/ai-context'
 import type { VaultEntry } from '../types'
 import { useAiPanelController, type AiPanelController } from './useAiPanelController'
@@ -19,7 +26,10 @@ interface AiPanelProps {
   onOpenNote?: (path: string) => void
   onUnsupportedAiPaste?: (message: string) => void
   defaultAiAgent?: AiAgentId
+  defaultAiTarget?: AiTarget
+  defaultAiAgentReadiness?: AiAgentReadiness
   defaultAiAgentReady?: boolean
+  locale?: AppLocale
   onFileCreated?: (relativePath: string) => void
   onFileModified?: (relativePath: string) => void
   onVaultChanged?: () => void
@@ -39,9 +49,16 @@ interface AiPanelViewProps {
   onOpenNote?: (path: string) => void
   onUnsupportedAiPaste?: (message: string) => void
   defaultAiAgent?: AiAgentId
+  defaultAiTarget?: AiTarget
+  defaultAiAgentReadiness?: AiAgentReadiness
   defaultAiAgentReady?: boolean
+  locale?: AppLocale
   activeEntry?: VaultEntry | null
   entries?: VaultEntry[]
+}
+
+function readinessFromReadyFlag(ready: boolean | undefined): AiAgentReadiness {
+  return (ready ?? true) ? 'ready' : 'missing'
 }
 
 export function AiPanelView({
@@ -50,16 +67,21 @@ export function AiPanelView({
   onOpenNote,
   onUnsupportedAiPaste,
   defaultAiAgent: providedDefaultAiAgent,
+  defaultAiTarget,
+  defaultAiAgentReadiness: providedDefaultAiAgentReadiness,
   defaultAiAgentReady: providedDefaultAiAgentReady,
+  locale = 'en',
   activeEntry,
   entries,
 }: AiPanelViewProps) {
   const defaultAiAgent = providedDefaultAiAgent ?? DEFAULT_AI_AGENT
-  const defaultAiAgentReady = providedDefaultAiAgentReady ?? true
-  const useLegacyAiExperience = providedDefaultAiAgent === undefined && providedDefaultAiAgentReady === undefined
+  const defaultAiAgentReadiness = providedDefaultAiAgentReadiness
+    ?? readinessFromReadyFlag(providedDefaultAiAgentReady)
   const inputRef = useRef<HTMLDivElement>(null)
   const panelRef = useRef<HTMLElement>(null)
-  const agentLabel = getAiAgentDefinition(defaultAiAgent).label
+  const activeTarget = defaultAiTarget
+  const agentLabel = activeTarget?.label ?? getAiAgentDefinition(defaultAiAgent).label
+  const targetKind = activeTarget?.kind ?? 'agent'
   const {
     agent,
     input,
@@ -67,8 +89,10 @@ export function AiPanelView({
     linkedEntries,
     hasContext,
     isActive,
+    permissionMode,
     handleSend,
     handleNavigateWikilink,
+    handlePermissionModeChange,
     handleNewChat,
   } = controller
 
@@ -99,18 +123,22 @@ export function AiPanelView({
     >
       <AiPanelHeader
         agentLabel={agentLabel}
-        agentReady={defaultAiAgentReady}
-        legacyCopy={useLegacyAiExperience}
+        agentReadiness={defaultAiAgentReadiness}
+        targetKind={targetKind}
+        locale={locale}
+        permissionMode={permissionMode}
+        permissionModeDisabled={isActive}
+        onPermissionModeChange={handlePermissionModeChange}
         onClose={onClose}
         onNewChat={handleNewChat}
       />
       {activeEntry && (
-        <AiPanelContextBar activeEntry={activeEntry} linkedCount={linkedEntries.length} />
+        <AiPanelContextBar activeEntry={activeEntry} linkedCount={linkedEntries.length} locale={locale} />
       )}
       <AiPanelMessageHistory
         agentLabel={agentLabel}
-        agentReady={defaultAiAgentReady}
-        legacyCopy={useLegacyAiExperience}
+        agentReadiness={defaultAiAgentReadiness}
+        locale={locale}
         messages={agent.messages}
         isActive={isActive}
         onOpenNote={onOpenNote}
@@ -120,12 +148,11 @@ export function AiPanelView({
       <AiPanelComposer
         entries={entries ?? []}
         agentLabel={agentLabel}
-        agentReady={defaultAiAgentReady}
-        hasContext={hasContext}
+        agentReadiness={defaultAiAgentReadiness}
+        locale={locale}
         input={input}
         inputRef={inputRef}
         isActive={isActive}
-        legacyCopy={useLegacyAiExperience}
         onChange={setInput}
         onSend={handleSend}
         onUnsupportedAiPaste={onUnsupportedAiPaste}
@@ -139,7 +166,10 @@ export function AiPanel({
   onOpenNote,
   onUnsupportedAiPaste,
   defaultAiAgent: providedDefaultAiAgent,
+  defaultAiTarget,
+  defaultAiAgentReadiness: providedDefaultAiAgentReadiness,
   defaultAiAgentReady: providedDefaultAiAgentReady,
+  locale = 'en',
   onFileCreated,
   onFileModified,
   onVaultChanged,
@@ -151,16 +181,21 @@ export function AiPanel({
   noteList,
   noteListFilter,
 }: AiPanelProps) {
+  const defaultAiAgentReadiness = providedDefaultAiAgentReadiness
+    ?? readinessFromReadyFlag(providedDefaultAiAgentReady)
   const controller = useAiPanelController({
     vaultPath,
     defaultAiAgent: providedDefaultAiAgent ?? DEFAULT_AI_AGENT,
+    defaultAiTarget,
     defaultAiAgentReady: providedDefaultAiAgentReady ?? true,
+    defaultAiAgentReadiness,
     activeEntry,
     activeNoteContent,
     entries,
     openTabs,
     noteList,
     noteListFilter,
+    locale,
     onOpenNote,
     onFileCreated,
     onFileModified,
@@ -174,7 +209,10 @@ export function AiPanel({
       onOpenNote={onOpenNote}
       onUnsupportedAiPaste={onUnsupportedAiPaste}
       defaultAiAgent={providedDefaultAiAgent}
+      defaultAiTarget={defaultAiTarget}
+      defaultAiAgentReadiness={defaultAiAgentReadiness}
       defaultAiAgentReady={providedDefaultAiAgentReady}
+      locale={locale}
       activeEntry={activeEntry}
       entries={entries}
     />

@@ -7,6 +7,7 @@ use tempfile::NamedTempFile;
 use walkdir::WalkDir;
 
 use super::filename_rules::validate_filename_stem;
+use super::path_identity::vault_relative_markdown_stem;
 use super::rename_transaction::RenameWorkspace;
 use crate::frontmatter::{update_frontmatter_content, FrontmatterValue};
 
@@ -55,17 +56,22 @@ struct WikilinkUpdateSummary {
     failed_updates: usize,
 }
 
-/// Convert a title to a filename slug (lowercase, hyphens, no special chars).
+/// Convert a title to a filename slug (lowercase, hyphens, Unicode letters/digits preserved).
 pub(super) fn title_to_slug(title: &str) -> String {
-    title
+    let slug = title
         .to_lowercase()
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .map(|c| if c.is_alphanumeric() { c } else { '-' })
         .collect::<String>()
         .split('-')
         .filter(|s| !s.is_empty())
         .collect::<Vec<&str>>()
-        .join("-")
+        .join("-");
+    if slug.is_empty() {
+        "untitled".to_string()
+    } else {
+        slug
+    }
 }
 
 /// Build a regex that matches wiki links referencing any of the provided targets.
@@ -206,12 +212,7 @@ fn update_note_title_in_content(content: &str, new_title: &str) -> String {
 
 /// Strip vault prefix and .md suffix to get the relative path stem (e.g., "project/weekly-review").
 fn to_path_stem(path: &Path, vault_root: &Path) -> String {
-    let relative = path.strip_prefix(vault_root).unwrap_or(path);
-    let normalized = relative.to_string_lossy().replace('\\', "/");
-    normalized
-        .strip_suffix(".md")
-        .unwrap_or(&normalized)
-        .to_string()
+    vault_relative_markdown_stem(path, vault_root)
 }
 
 pub(crate) fn recover_pending_rename_transactions(vault: &Path) -> Result<(), String> {
@@ -496,7 +497,7 @@ pub struct DetectedRename {
 
 /// Detect renamed files by comparing working tree against HEAD using git diff.
 pub fn detect_renames(vault: &Path) -> Result<Vec<DetectedRename>, String> {
-    let output = crate::hidden_command("git")
+    let output = crate::git::git_command()
         .args(["diff", "HEAD", "--name-status", "--diff-filter=R", "-M"])
         .current_dir(vault)
         .output()
@@ -596,6 +597,27 @@ mod tests {
         vault.join(relative_path)
     }
 
+    fn run_git(vault: &Path, args: &[&str]) {
+        let output = crate::hidden_command("git")
+            .args(args)
+            .current_dir(vault)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn init_git_repo_with_quoted_paths(vault: &Path) {
+        run_git(vault, &["init"]);
+        run_git(vault, &["config", "user.email", "test@test.com"]);
+        run_git(vault, &["config", "user.name", "Test"]);
+        run_git(vault, &["config", "core.quotePath", "true"]);
+    }
+
     fn assert_rename_note_filename_error<P>(
         new_filename_stem: impl AsRef<str>,
         existing_destination: Option<P>,
@@ -634,11 +656,105 @@ mod tests {
         assert_eq!(result.unwrap_err(), expected_error.as_ref());
     }
 
+    fn assert_slug_case(input: &str, expected: &str) {
+        assert_eq!(title_to_slug(input), expected);
+    }
+
+    fn assert_unicode_rename_path(result: &RenameResult) {
+        assert!(
+            result.new_path.ends_with("你好.md"),
+            "got {}",
+            result.new_path
+        );
+    }
+
+    fn assert_unicode_rename_filesystem(vault: &Path, old_path: &Path, result: &RenameResult) {
+        assert!(Path::new(&result.new_path).exists());
+        assert!(!old_path.exists());
+        assert!(
+            !vault.join(".md").exists(),
+            "must not produce a stem-less .md file"
+        );
+    }
+
+    fn assert_unicode_rename_frontmatter(result: &RenameResult) {
+        let new_content = fs::read_to_string(&result.new_path).unwrap();
+        assert!(new_content.contains("title: 你好"));
+    }
+
     #[test]
     fn test_title_to_slug() {
         assert_eq!(title_to_slug("Weekly Review"), "weekly-review");
         assert_eq!(title_to_slug("My  Note!  "), "my-note");
         assert_eq!(title_to_slug("Hello World"), "hello-world");
+    }
+
+    #[test]
+    fn test_title_to_slug_preserves_unicode_letters() {
+        assert_slug_case("你好", "你好");
+        assert_slug_case("こんにちは", "こんにちは");
+        assert_slug_case("My Note 你好", "my-note-你好");
+        assert_slug_case("项目-2025  ✦  Q1", "项目-2025-q1");
+    }
+
+    #[test]
+    fn test_title_to_slug_falls_back_to_untitled_for_symbol_only_titles() {
+        assert_eq!(title_to_slug("！？"), "untitled");
+        assert_eq!(title_to_slug("---"), "untitled");
+    }
+
+    #[test]
+    fn test_rename_note_with_cjk_title_writes_unicode_filename() {
+        let dir = TempDir::new().unwrap();
+        let vault = dir.path();
+        create_test_file(
+            vault,
+            "untitled-note-1700000000.md",
+            "---\ntype: Note\n---\n# Untitled Note\n",
+        );
+
+        let old_path = vault.join("untitled-note-1700000000.md");
+        let result = rename_note(RenameNoteRequest {
+            vault_path: vault.to_str().unwrap(),
+            old_path: old_path.to_str().unwrap(),
+            new_title: "你好",
+            old_title_hint: None,
+        })
+        .unwrap();
+
+        assert_unicode_rename_path(&result);
+        assert_unicode_rename_filesystem(vault, &old_path, &result);
+        assert_unicode_rename_frontmatter(&result);
+    }
+
+    #[test]
+    fn test_detect_renames_preserves_chinese_markdown_paths() {
+        let dir = TempDir::new().unwrap();
+        let vault = dir.path();
+
+        init_git_repo_with_quoted_paths(vault);
+        create_test_file(vault, "旧名.md", "# 旧名\n");
+        run_git(vault, &["add", "旧名.md"]);
+        run_git(vault, &["commit", "-m", "add chinese note"]);
+        fs::rename(vault.join("旧名.md"), vault.join("新名.md")).unwrap();
+        run_git(vault, &["add", "-A"]);
+
+        let renames = detect_renames(vault).unwrap();
+
+        assert_eq!(renames.len(), 1);
+        assert_eq!(renames[0].old_path, "旧名.md");
+        assert_eq!(renames[0].new_path, "新名.md");
+    }
+
+    #[test]
+    fn test_path_stem_normalizes_tmp_aliases_and_separators() {
+        assert_eq!(
+            to_path_stem(
+                Path::new("/tmp/tolaria-vault/projects\\weekly-review.md"),
+                Path::new("/private/tmp/tolaria-vault")
+            ),
+            "projects/weekly-review"
+        );
     }
 
     #[test]

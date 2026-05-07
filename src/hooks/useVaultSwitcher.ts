@@ -162,6 +162,17 @@ function syncDefaultVaultExport(path: string) {
   DEFAULT_VAULTS[0] = { label: GETTING_STARTED_LABEL, path }
 }
 
+function selectedBridgeVaultPath(selectedVaultPath: string | null): string | null {
+  const path = selectedVaultPath?.trim()
+  return path ? path : null
+}
+
+async function syncMcpBridgeVault(selectedVaultPath: string | null): Promise<void> {
+  await tauriCall<string>('sync_mcp_bridge_vault', {
+    vaultPath: selectedBridgeVaultPath(selectedVaultPath),
+  })
+}
+
 function isCanonicalGettingStartedPath(path: string, resolvedDefaultPath: string): boolean {
   return path === resolvedDefaultPath
 }
@@ -408,6 +419,7 @@ function useLoadPersistedVaultState(
   onSwitchRef: MutableRefObject<() => void>,
 ) {
   const {
+    lastPersistedSnapshotRef,
     setDefaultAvailable,
     setDefaultPath,
     setExtraVaults,
@@ -424,7 +436,7 @@ function useLoadPersistedVaultState(
       .then(({ activeVault, defaultAvailable, hiddenDefaults: hidden, persistedSnapshot, resolvedDefaultPath, vaults }) => {
         if (cancelled) return
 
-        store.lastPersistedSnapshotRef.current = persistedSnapshot
+        lastPersistedSnapshotRef.current = persistedSnapshot
         setExtraVaults(vaults)
         setHiddenDefaults(hidden)
         applyResolvedDefaultPath({
@@ -448,7 +460,7 @@ function useLoadPersistedVaultState(
       })
 
     return () => { cancelled = true }
-  }, [onSwitchRef, setDefaultAvailable, setDefaultPath, setExtraVaults, setHiddenDefaults, setLoaded, setSelectedVaultPath, setVaultPath])
+  }, [lastPersistedSnapshotRef, onSwitchRef, setDefaultAvailable, setDefaultPath, setExtraVaults, setHiddenDefaults, setLoaded, setSelectedVaultPath, setVaultPath])
 }
 
 function usePersistedVaultStorage(store: PersistedVaultStore) {
@@ -519,6 +531,16 @@ function usePersistedVaultState(onSwitchRef: MutableRefObject<() => void>): Pers
     setVaultPath,
     vaultPath,
   }
+}
+
+function useMcpBridgeVaultSync(loaded: boolean, selectedVaultPath: string | null) {
+  useEffect(() => {
+    if (!loaded) return
+
+    syncMcpBridgeVault(selectedVaultPath).catch(err => {
+      console.warn('Failed to sync MCP bridge vault:', err)
+    })
+  }, [loaded, selectedVaultPath])
 }
 
 function formatGettingStartedRestoreError(err: unknown): string {
@@ -1144,6 +1166,8 @@ export function useVaultSwitcher({ onSwitch, onToast }: UseVaultSwitcherOptions)
     selectedVaultPath,
     vaultPath,
   } = persistedState
+  useMcpBridgeVaultSync(loaded, selectedVaultPath)
+
   const { allVaults, defaultVaults, isGettingStartedHidden } = useVaultCollections(
     defaultAvailable,
     defaultPath,

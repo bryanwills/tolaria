@@ -2,12 +2,35 @@ import { useCallback, useEffect, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { isTauri, mockInvoke } from '../mock-tauri'
 import { normalizeStoredAiAgent } from '../lib/aiAgents'
+import { normalizeAiModelProviders } from '../lib/aiTargets'
+import { shouldHideGitignoredFiles } from '../lib/gitignoredVisibility'
+import {
+  notifyGitignoredVisibilityChanged,
+  TOGGLE_GITIGNORED_VISIBILITY_EVENT,
+} from '../lib/gitignoredVisibilityEvents'
+import { serializeUiLanguagePreference } from '../lib/i18n'
+import { trackThemeModeChanged } from '../lib/productAnalytics'
 import { normalizeReleaseChannel, serializeReleaseChannel } from '../lib/releaseChannel'
-import { normalizeThemeMode } from '../lib/themeMode'
+import { DEFAULT_THEME_MODE, normalizeThemeMode, type ThemeMode } from '../lib/themeMode'
 import type { Settings } from '../types'
+import { normalizeNoteWidthMode } from '../utils/noteWidth'
 
-function tauriCall<T>(command: string, tauriArgs: Record<string, unknown>, mockArgs?: Record<string, unknown>): Promise<T> {
-  return isTauri() ? invoke<T>(command, tauriArgs) : mockInvoke<T>(command, mockArgs ?? tauriArgs)
+async function invokeNativeIfAvailable<T>(command: string, tauriArgs: Record<string, unknown>): Promise<T | undefined> {
+  try {
+    return await invoke<T>(command, tauriArgs)
+  } catch (err) {
+    if (isTauri()) throw err
+    return undefined
+  }
+}
+
+async function tauriCall<T>(command: string, tauriArgs: Record<string, unknown>, mockArgs?: Record<string, unknown>): Promise<T> {
+  if (isTauri()) return invoke<T>(command, tauriArgs)
+
+  const nativeResult = await invokeNativeIfAvailable<T>(command, tauriArgs)
+  if (nativeResult !== undefined) return nativeResult
+
+  return mockInvoke<T>(command, mockArgs ?? tauriArgs)
 }
 
 const EMPTY_SETTINGS: Settings = {
@@ -22,18 +45,42 @@ const EMPTY_SETTINGS: Settings = {
   anonymous_id: null,
   release_channel: null,
   theme_mode: null,
+  ui_language: null,
+  note_width_mode: null,
+  sidebar_type_pluralization_enabled: null,
   default_ai_agent: null,
+  default_ai_target: null,
+  ai_model_providers: null,
+  hide_gitignored_files: null,
+  all_notes_show_pdfs: null,
+  all_notes_show_images: null,
+  all_notes_show_unsupported: null,
 }
 
 function normalizeSettings(settings: Settings): Settings {
+  const aiModelProviders = normalizeAiModelProviders(settings.ai_model_providers)
+
   return {
     ...settings,
     release_channel: serializeReleaseChannel(
       normalizeReleaseChannel(settings.release_channel),
     ),
     theme_mode: normalizeThemeMode(settings.theme_mode),
+    ui_language: serializeUiLanguagePreference(settings.ui_language),
+    note_width_mode: normalizeNoteWidthMode(settings.note_width_mode),
+    sidebar_type_pluralization_enabled: settings.sidebar_type_pluralization_enabled ?? null,
     default_ai_agent: normalizeStoredAiAgent(settings.default_ai_agent),
+    default_ai_target: settings.default_ai_target?.trim() || null,
+    ai_model_providers: aiModelProviders.length > 0 ? aiModelProviders : null,
+    hide_gitignored_files: settings.hide_gitignored_files ?? null,
+    all_notes_show_pdfs: settings.all_notes_show_pdfs ?? null,
+    all_notes_show_images: settings.all_notes_show_images ?? null,
+    all_notes_show_unsupported: settings.all_notes_show_unsupported ?? null,
   }
+}
+
+function effectiveThemeMode(settings: Settings): ThemeMode {
+  return normalizeThemeMode(settings.theme_mode) ?? DEFAULT_THEME_MODE
 }
 
 export function useSettings() {
@@ -56,14 +103,40 @@ export function useSettings() {
   }, [loadSettings])
 
   const saveSettings = useCallback(async (newSettings: Settings) => {
+    const previousHideGitignored = shouldHideGitignoredFiles(settings)
+    const previousThemeMode = effectiveThemeMode(settings)
     const normalizedSettings = normalizeSettings(newSettings)
     try {
       await tauriCall<null>('save_settings', { settings: normalizedSettings })
       setSettings(normalizedSettings)
+      const nextThemeMode = effectiveThemeMode(normalizedSettings)
+      if (previousThemeMode !== nextThemeMode) {
+        trackThemeModeChanged(nextThemeMode)
+      }
+      const nextHideGitignored = shouldHideGitignoredFiles(normalizedSettings)
+      if (previousHideGitignored !== nextHideGitignored) {
+        notifyGitignoredVisibilityChanged(nextHideGitignored)
+      }
     } catch (err) {
       console.error('Failed to save settings:', err)
     }
-  }, [])
+  }, [settings])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    const handleToggleGitignoredVisibility = () => {
+      void saveSettings({
+        ...settings,
+        hide_gitignored_files: !shouldHideGitignoredFiles(settings),
+      })
+    }
+
+    window.addEventListener(TOGGLE_GITIGNORED_VISIBILITY_EVENT, handleToggleGitignoredVisibility)
+    return () => {
+      window.removeEventListener(TOGGLE_GITIGNORED_VISIBILITY_EVENT, handleToggleGitignoredVisibility)
+    }
+  }, [saveSettings, settings])
 
   return { settings, loaded, saveSettings }
 }

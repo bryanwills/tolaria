@@ -129,6 +129,24 @@ describe('relativePathStem', () => {
     expect(relativePathStem('/Users/luca/Vault/docs/adr/0031.md', '/Users/luca/Vault')).toBe('docs/adr/0031')
   })
 
+  it('normalizes Windows extended-length paths before extracting the vault-relative stem', () => {
+    expect(
+      relativePathStem(
+        '\\\\?\\C:\\Users\\lrfno\\Documents\\tolaria-vault\\application-design-and-build.md',
+        'C:\\Users\\lrfno\\Documents\\tolaria-vault',
+      ),
+    ).toBe('application-design-and-build')
+  })
+
+  it('keeps nested Windows note paths vault-relative with slash separators', () => {
+    expect(
+      relativePathStem(
+        'C:\\Users\\lrfno\\Documents\\Tolaria Vault\\projects\\application-design-and-build.md',
+        'c:/users/lrfno/documents/tolaria vault',
+      ),
+    ).toBe('projects/application-design-and-build')
+  })
+
   it('falls back to filename stem when vault path does not match', () => {
     expect(relativePathStem('/other/path/note.md', '/Users/luca/Vault')).toBe('note')
   })
@@ -137,6 +155,10 @@ describe('relativePathStem', () => {
 describe('slugifyWikilinkTarget', () => {
   it('slugifies a human title to a canonical target', () => {
     expect(slugifyWikilinkTarget('Weekly Review')).toBe('weekly-review')
+  })
+
+  it('preserves Unicode titles when no existing entry resolves them', () => {
+    expect(slugifyWikilinkTarget('你好')).toBe('你好')
   })
 
   it('falls back to untitled when the title has no slug characters', () => {
@@ -164,6 +186,10 @@ describe('canonicalWikilinkTargetForTitle', () => {
 
   it('falls back to a slug for a newly created note title', () => {
     expect(canonicalWikilinkTargetForTitle('Brand New Note', [], '/vault')).toBe('brand-new-note')
+  })
+
+  it('falls back to a Unicode-preserving slug for a newly created note title', () => {
+    expect(canonicalWikilinkTargetForTitle('你好', [], '/vault')).toBe('你好')
   })
 })
 

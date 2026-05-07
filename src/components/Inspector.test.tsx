@@ -113,6 +113,7 @@ describe('Inspector', () => {
     render(<Inspector {...defaultProps} />)
     // Header now says "Properties" (not "Inspector")
     expect(screen.getAllByText('Properties').length).toBeGreaterThan(0)
+    expect(screen.getByTestId('properties-panel-icon')).toBeInTheDocument()
     expect(screen.getByText('No note selected')).toBeInTheDocument()
   })
 
@@ -122,11 +123,40 @@ describe('Inspector', () => {
     expect(screen.queryByText('No note selected')).not.toBeInTheDocument()
   })
 
-  it('calls onToggle when toggle button clicked', () => {
+  it('calls onToggle when the close button is clicked', () => {
     const onToggle = vi.fn()
     render(<Inspector {...defaultProps} onToggle={onToggle} />)
-    fireEvent.click(screen.getByRole('button'))
+    fireEvent.click(screen.getAllByRole('button', { name: 'Close Properties (⌘⇧I)' })[1])
     expect(onToggle).toHaveBeenCalledOnce()
+  })
+
+  it('closes when the properties sidebar icon is clicked', () => {
+    const onToggle = vi.fn()
+    render(<Inspector {...defaultProps} onToggle={onToggle} />)
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Close Properties (⌘⇧I)' })[0])
+
+    expect(onToggle).toHaveBeenCalledOnce()
+  })
+
+  it('shows a colliding-properties warning that opens the raw editor', async () => {
+    const onToggleRawEditor = vi.fn()
+    const content = `---
+type: Note
+status: Active
+Status: Evergreened
+---
+# Test Project
+`
+
+    renderSelectedInspector({ content, onToggleRawEditor })
+
+    const warning = screen.getByRole('button', { name: 'Colliding properties. Open raw editor.' })
+    fireEvent.focus(warning)
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('Colliding properties')
+
+    fireEvent.click(warning)
+    expect(onToggleRawEditor).toHaveBeenCalledOnce()
   })
 
   it('shows properties when a note is selected', () => {
@@ -632,6 +662,29 @@ Status: Active
       )
       fireEvent.click(screen.getByText('Initialize properties'))
       expect(onInit).toHaveBeenCalledWith('/vault/plain-note.md')
+    })
+
+    it('does not offer frontmatter initialization for binary attachments', () => {
+      const onInit = vi.fn()
+      const attachmentEntry: VaultEntry = {
+        ...noFrontmatterEntry,
+        path: '/vault/attachments/screenshot.png',
+        filename: 'screenshot.png',
+        title: 'screenshot.png',
+        fileKind: 'binary',
+      }
+
+      render(
+        <Inspector
+          {...defaultProps}
+          entry={attachmentEntry}
+          content=""
+          onInitializeProperties={onInit}
+        />
+      )
+
+      expect(screen.queryByText('Initialize properties')).not.toBeInTheDocument()
+      expect(onInit).not.toHaveBeenCalled()
     })
 
     it('shows invalid frontmatter notice with fix button', () => {

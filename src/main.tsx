@@ -4,6 +4,7 @@ import { createRoot } from 'react-dom/client'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import './index.css'
 import App from './App.tsx'
+import { FrontendReadyMarker } from './components/FrontendReadyMarker'
 import { LinuxTitlebar } from './components/LinuxTitlebar'
 import { applyStoredThemeMode } from './lib/themeMode'
 import {
@@ -16,7 +17,33 @@ import {
   type AppCommandShortcutEventInit,
   type AppCommandShortcutEventOptions,
 } from './hooks/appCommandCatalog'
+import { isRecoveredBlockNoteRenderError } from './components/blockNoteRenderRecovery'
 import { shouldUseLinuxWindowChrome } from './utils/platform'
+import { reloadFrontendOnceIfStartupFailed } from './utils/frontendReady'
+
+const EDITOR_DROP_SELECTOR = '.editor__blocknote-container'
+
+function dataTransferHasFiles(dataTransfer: DataTransfer | null): boolean {
+  if (!dataTransfer) return false
+  if (dataTransfer.files.length > 0) return true
+  if (Array.from(dataTransfer.types).includes('Files')) return true
+
+  return Array.from(dataTransfer.items).some((item) => item.kind === 'file')
+}
+
+function isEditorDropTarget(target: EventTarget | null): boolean {
+  return target instanceof Element && target.closest(EDITOR_DROP_SELECTOR) !== null
+}
+
+function preventFileDropNavigation(event: DragEvent): void {
+  if (isEditorDropTarget(event.target)) return
+  if (!dataTransferHasFiles(event.dataTransfer)) return
+
+  event.preventDefault()
+}
+
+document.addEventListener('dragover', preventFileDropNavigation, true)
+document.addEventListener('drop', preventFileDropNavigation, true)
 
 // Disable native WebKit context menu in Tauri (WKWebView intercepts right-click
 // at native level before React's synthetic events can call preventDefault).
@@ -88,18 +115,31 @@ function captureReactRootError(
   error: unknown,
   errorInfo: { componentStack?: string },
 ): void {
-  sentryReactErrorHandler(error, { componentStack: errorInfo.componentStack ?? '' })
+  const componentStack = errorInfo.componentStack ?? ''
+  sentryReactErrorHandler(error, { componentStack })
+  reloadFrontendOnceIfStartupFailed()
+}
+
+function captureRecoverableReactRootError(
+  error: unknown,
+  errorInfo: { componentStack?: string },
+): void {
+  const componentStack = errorInfo.componentStack ?? ''
+  if (isRecoveredBlockNoteRenderError(error, componentStack)) return
+
+  captureReactRootError(error, { componentStack })
 }
 
 createRoot(document.getElementById('root')!, {
-  onCaughtError: captureReactRootError,
+  onCaughtError: captureRecoverableReactRootError,
   onUncaughtError: captureReactRootError,
-  onRecoverableError: captureReactRootError,
+  onRecoverableError: captureRecoverableReactRootError,
 }).render(
   <StrictMode>
     <TooltipProvider>
       <LinuxTitlebar />
       <App />
+      <FrontendReadyMarker />
     </TooltipProvider>
   </StrictMode>,
 )
