@@ -195,16 +195,16 @@ function getSettingsFocusableElements(panel: HTMLElement): HTMLElement[] {
 
 function focusSettingsBoundary(focusableElements: HTMLElement[], shiftKey: boolean): void {
   const targetIndex = shiftKey ? focusableElements.length - 1 : 0
-  focusableElements[targetIndex]?.focus()
+  focusableElements.at(targetIndex)?.focus()
 }
 
-function isSettingsPanelElement(panel: HTMLElement, activeElement: Element | null): activeElement is HTMLElement {
-  return activeElement instanceof HTMLElement && panel.contains(activeElement)
+function isSettingsPanelElement(panel: HTMLElement, activeElement: Element | null): activeElement is Element {
+  return activeElement instanceof Element && panel.contains(activeElement)
 }
 
-function isSettingsFocusBoundary(activeElement: HTMLElement, focusableElements: HTMLElement[], shiftKey: boolean): boolean {
+function isSettingsFocusBoundary(activeElement: Element, focusableElements: HTMLElement[], shiftKey: boolean): boolean {
   const boundaryIndex = shiftKey ? 0 : focusableElements.length - 1
-  return activeElement === focusableElements[boundaryIndex]
+  return activeElement === focusableElements.at(boundaryIndex)
 }
 
 function trapSettingsPanelFocus(event: KeyboardEvent, panel: HTMLElement | null): void {
@@ -1216,7 +1216,7 @@ function AiAgentsInstalledSection({
 
 function renderDefaultAiAgentSummary(defaultAiAgent: AiAgentId, aiAgentsStatus: AiAgentsStatus, t: Translate): string {
   const definition = getAiAgentDefinition(defaultAiAgent)
-  const status = aiAgentsStatus[defaultAiAgent]
+  const status = Reflect.get(aiAgentsStatus, defaultAiAgent) as AiAgentsStatus[AiAgentId]
   if (status.status === 'installed') {
     return t('settings.aiAgents.ready', {
       agent: definition.label,

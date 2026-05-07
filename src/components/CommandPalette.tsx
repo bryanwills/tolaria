@@ -316,8 +316,8 @@ function OpenCommandPalette({
 
   useEffect(() => {
     if (aiMode || !listRef.current) return
-    const selectedElement = listRef.current.querySelector('[data-selected="true"]') as HTMLElement | null
-    selectedElement?.scrollIntoView({ block: 'nearest' })
+    const selectedHTMLElement = listRef.current.querySelector('[data-selected="true"]') as HTMLElement | null
+    selectedHTMLElement?.scrollIntoView({ block: 'nearest' })
   }, [aiMode, selectedIndex])
 
   useEffect(() => {
@@ -344,7 +344,7 @@ function OpenCommandPalette({
 
       if (event.key === 'Enter') {
         event.preventDefault()
-        const command = flatList[selectedIndex]
+        const command = flatList.at(selectedIndex)
         if (!command) return
         rememberCommandOpener(command, inputRef.current)
         onClose()

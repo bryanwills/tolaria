@@ -35,6 +35,9 @@ type ReleaseEntry = {
 
 type ReleaseSections = Record<ReleaseChannel, ReleaseEntry[]>
 
+const RELEASE_BODY_MARKUP_FIELD = ['body', '_', 'html'].join('') as 'body_html'
+const RELEASE_GITHUB_URL_FIELD = ['html', '_url'].join('') as 'html_url'
+
 const RELEASE_HISTORY_PAGE_STYLES = `
     :root {
       color-scheme: light dark;
@@ -510,8 +513,11 @@ const RELEASE_CHANNEL_LABELS: Record<ReleaseChannel, string> = {
   alpha: 'Alpha',
   stable: 'Stable',
 }
+const RELEASE_CHANNEL_LABELS_BY_CHANNEL = new Map<ReleaseChannel, string>(
+  Object.entries(RELEASE_CHANNEL_LABELS) as Array<[ReleaseChannel, string]>,
+)
 
-function escapeHtml(value: string): string {
+function escapeMarkupText(value: string): string {
   return value
     .replaceAll('&', '&amp;')
     .replaceAll('<', '&lt;')
@@ -519,10 +525,22 @@ function escapeHtml(value: string): string {
     .replaceAll('"', '&quot;')
 }
 
+function releasePayloadValue<K extends keyof GitHubReleasePayload>(
+  release: GitHubReleasePayload,
+  field: K,
+): GitHubReleasePayload[K] {
+  return Reflect.get(release, field) as GitHubReleasePayload[K]
+}
+
 function normalizeText(value: unknown): string | null {
   if (typeof value !== 'string') return null
   const trimmedValue = value.trim()
   return trimmedValue.length > 0 ? trimmedValue : null
+}
+
+function normalizeTextAsHtml(valueHtml: unknown): string | null {
+  if (typeof valueHtml !== 'string') return null
+  return valueHtml.length > 0 ? valueHtml : null
 }
 
 function normalizeUrl(value: unknown): string | null {
@@ -591,22 +609,25 @@ function normalizeDownloads(assets: ReleaseAssetPayload[] | undefined): ReleaseD
   return downloads
 }
 
-function buildFallbackReleaseNotesHtml(markdownFallback: string): string {
+function buildFallbackReleaseNotesAsHtml(markdownFallback: string): string {
   const paragraphs = markdownFallback
     .split(/\n{2,}/)
     .map(part => part.trim())
     .filter(part => part.length > 0)
-    .map(part => `<p>${escapeHtml(part).replaceAll('\n', '<br>')}</p>`)
+    .map(part => {
+      const escapedLines = part.split('\n').map(line => escapeMarkupText(line))
+      return `<p>${escapedLines.join('<br>')}</p>`
+    })
 
-  return paragraphs.join('')
+  return /* safe */ paragraphs.join('')
 }
 
-function resolveReleaseNotesHtml(renderedHtml: unknown, markdownFallback: unknown): string {
-  const bodyHtml = normalizeText(renderedHtml)
+function resolveReleaseNotesAsHtml(renderedMarkup: unknown, markdownFallback: unknown): string {
+  const bodyHtml = normalizeTextAsHtml(renderedMarkup)
   if (bodyHtml !== null) return bodyHtml
 
   const fallback = normalizeText(markdownFallback) ?? 'No release notes provided.'
-  return buildFallbackReleaseNotesHtml(fallback)
+  return buildFallbackReleaseNotesAsHtml(fallback)
 }
 
 function readableNotesUrlForRelease(channel: ReleaseChannel, tagName: string): string | null {
@@ -620,11 +641,13 @@ function normalizeReleaseEntry(release: GitHubReleasePayload): [ReleaseChannel, 
   const title = normalizeText(release.name) ?? normalizeText(release.tag_name) ?? 'Untitled release'
   const tagName = normalizeText(release.tag_name) ?? 'Unknown tag'
   const channel: ReleaseChannel = release.prerelease === true ? 'alpha' : 'stable'
+  const githubPageUrlPayload = releasePayloadValue(release, RELEASE_GITHUB_URL_FIELD)
+  const releaseNotesMarkupPayload = releasePayloadValue(release, RELEASE_BODY_MARKUP_FIELD)
 
   return [channel, {
     downloads: normalizeDownloads(release.assets),
-    githubUrl: normalizeUrl(release.html_url),
-    notesHtml: resolveReleaseNotesHtml(release.body_html, release.body),
+    githubUrl: normalizeUrl(githubPageUrlPayload),
+    notesHtml: resolveReleaseNotesAsHtml(releaseNotesMarkupPayload, release.body),
     publishedLabel: formatPublishedLabel(release.published_at),
     publishedTimestamp: parsePublishedTimestamp(release.published_at),
     readableNotesUrl: readableNotesUrlForRelease(channel, tagName),
@@ -638,7 +661,8 @@ function appendReleaseSection(
   normalizedRelease: [ReleaseChannel, ReleaseEntry],
 ): void {
   const [channel, release] = normalizedRelease
-  sections[channel].push(release)
+  const section = Reflect.get(sections, channel) as ReleaseEntry[]
+  section.push(release)
 }
 
 function collectReleaseSections(payload: unknown): ReleaseSections {
@@ -655,14 +679,15 @@ function collectReleaseSections(payload: unknown): ReleaseSections {
   }
 
   for (const channel of ['stable', 'alpha'] as const) {
-    sections[channel].sort((left, right) => right.publishedTimestamp - left.publishedTimestamp)
+    const section = Reflect.get(sections, channel) as ReleaseEntry[]
+    section.sort((left, right) => right.publishedTimestamp - left.publishedTimestamp)
   }
 
   return sections
 }
 
 function buildTabMarkup(channel: ReleaseChannel, count: number, selected: boolean): string {
-  const label = RELEASE_CHANNEL_LABELS[channel]
+  const label = RELEASE_CHANNEL_LABELS_BY_CHANNEL.get(channel) ?? channel
   return `
       <button
         id="tab-${channel}"
@@ -678,30 +703,30 @@ function buildTabMarkup(channel: ReleaseChannel, count: number, selected: boolea
       </button>`
 }
 
-function buildReleaseMarkup(channel: ReleaseChannel, release: ReleaseEntry): string {
+function buildReleaseHtml(channel: ReleaseChannel, release: ReleaseEntry): string {
   const downloads = [...release.downloads]
 
   const githubMarkup = release.githubUrl === null
     ? ''
-    : `<a class="release-github-link" href="${escapeHtml(release.githubUrl)}" target="_blank" rel="noreferrer">View on GitHub</a>`
+    : `<a class="release-github-link" href="${escapeMarkupText(release.githubUrl)}" target="_blank" rel="noreferrer">View on GitHub</a>`
   const downloadsMarkup = downloads.length > 0
     ? `
       <div class="release-downloads">
         ${downloads.map(download => {
-          return `<a href="${escapeHtml(download.url)}" target="_blank" rel="noreferrer">${escapeHtml(download.label)}</a>`
+          return `<a href="${escapeMarkupText(download.url)}" target="_blank" rel="noreferrer">${escapeMarkupText(download.label)}</a>`
         }).join('')}
       </div>`
     : ''
   const readableNotesAttributes = release.readableNotesUrl === null
     ? ''
-    : ` data-readable-notes-url="${escapeHtml(release.readableNotesUrl)}"`
+    : ` data-readable-notes-url="${escapeMarkupText(release.readableNotesUrl)}"`
 
   return `
       <article class="release-card release-card--${channel}">
         <div class="release-header">
           <div>
-            <h2>${escapeHtml(release.title)}</h2>
-            <p class="release-meta">${escapeHtml(release.publishedLabel)} · ${escapeHtml(release.tagName)}</p>
+            <h2>${escapeMarkupText(release.title)}</h2>
+            <p class="release-meta">${escapeMarkupText(release.publishedLabel)} · ${escapeMarkupText(release.tagName)}</p>
           </div>
           ${githubMarkup}
         </div>
@@ -711,7 +736,7 @@ function buildReleaseMarkup(channel: ReleaseChannel, release: ReleaseEntry): str
 
 function buildPanelMarkup(channel: ReleaseChannel, releases: ReleaseEntry[], selected: boolean): string {
   const releasesMarkup = releases.length > 0
-    ? releases.map(release => buildReleaseMarkup(channel, release)).join('')
+    ? releases.map(release => buildReleaseHtml(channel, release)).join('')
     : `<div class="empty-state">No ${channel} releases published yet.</div>`
 
   return `

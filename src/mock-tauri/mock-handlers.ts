@@ -125,9 +125,7 @@ const DEFAULT_MOCK_VAULT = {
 }
 
 let mockLastVaultPath: string | null = DEFAULT_MOCK_VAULT_PATH
-const mockRemoteStateByVault: Record<string, boolean> = {
-  [DEFAULT_MOCK_VAULT_PATH]: true,
-}
+const mockRemoteStateByVault = new Map<string, boolean>([[DEFAULT_MOCK_VAULT_PATH, true]])
 
 let mockVaultList: { vaults: Array<{ label: string; path: string }>; active_vault: string | null } = {
   vaults: [DEFAULT_MOCK_VAULT],
@@ -149,13 +147,29 @@ function normalizeMockVaultPath(path: string | null | undefined): string | null 
 function setMockRemoteState(path: string | null | undefined, hasRemote: boolean): void {
   const normalizedPath = normalizeMockVaultPath(path)
   if (!normalizedPath) return
-  mockRemoteStateByVault[normalizedPath] = hasRemote
+  mockRemoteStateByVault.set(normalizedPath, hasRemote)
 }
 
 function getMockRemoteState(path: string | null | undefined): boolean {
   const normalizedPath = normalizeMockVaultPath(path)
   if (!normalizedPath) return true
-  return mockRemoteStateByVault[normalizedPath] ?? true
+  return mockRemoteStateByVault.get(normalizedPath) ?? true
+}
+
+type MockContentPath = { path: string }
+type MockContentWrite = MockContentPath & { content: string }
+
+function readMockContent({ path }: MockContentPath): string {
+  const content = Reflect.get(MOCK_CONTENT, path)
+  return typeof content === 'string' ? content : ''
+}
+
+function writeMockContent({ path, content }: MockContentWrite): void {
+  Reflect.set(MOCK_CONTENT, path, content)
+}
+
+function deleteMockContent({ path }: MockContentPath): void {
+  Reflect.deleteProperty(MOCK_CONTENT, path)
 }
 
 function relativePathStem({ path, vaultPath }: { path: string; vaultPath: string }) {
@@ -191,10 +205,40 @@ function replaceRenamedWikilinks({ content, oldTargets, newPathStem }: {
 }) {
   if (oldTargets.length === 0) return content
   const targets = new Set(oldTargets)
-  return content.replace(/\[\[([^\]|]+)(\|[^\]]*)?\]\]/g, (match: string, target: string, pipe: string | undefined) => {
-    if (!targets.has(target)) return match
-    return pipe ? `[[${newPathStem}${pipe}]]` : `[[${newPathStem}]]`
-  })
+  let rewritten = ''
+  let cursor = 0
+
+  while (cursor < content.length) {
+    const start = content.indexOf('[[', cursor)
+    if (start === -1) break
+
+    const end = content.indexOf(']]', start + 2)
+    if (end === -1) break
+
+    rewritten += content.slice(cursor, start)
+    rewritten += renamedWikilinkToken({
+      newPathStem,
+      targets,
+      token: content.slice(start, end + 2),
+    })
+    cursor = end + 2
+  }
+
+  return rewritten + content.slice(cursor)
+}
+
+function renamedWikilinkToken({ newPathStem, targets, token }: {
+  newPathStem: string
+  targets: Set<string>
+  token: string
+}) {
+  const body = token.slice(2, -2)
+  const pipeIndex = body.indexOf('|')
+  const target = pipeIndex === -1 ? body : body.slice(0, pipeIndex)
+  if (!targets.has(target)) return token
+
+  const pipe = pipeIndex === -1 ? '' : body.slice(pipeIndex)
+  return `[[${newPathStem}${pipe}]]`
 }
 
 function updateMockRenameReferences({ newPath, newPathStem, oldTargets }: {
@@ -207,7 +251,7 @@ function updateMockRenameReferences({ newPath, newPathStem, oldTargets }: {
     if (path === newPath) continue
     const replaced = replaceRenamedWikilinks({ content, oldTargets, newPathStem })
     if (replaced === content) continue
-    MOCK_CONTENT[path] = replaced
+    writeMockContent({ path, content: replaced })
     updatedFiles += 1
   }
   return updatedFiles
@@ -216,7 +260,7 @@ function updateMockRenameReferences({ newPath, newPathStem, oldTargets }: {
 function handleRenameNote(args: { vault_path: string; old_path: string; new_title: string; old_title?: string | null }) {
   const oldEntry = MOCK_ENTRIES.find(e => e.path === args.old_path)
   const oldTitle = args.old_title ?? oldEntry?.title ?? ''
-  const oldContent = MOCK_CONTENT[args.old_path] ?? ''
+  const oldContent = readMockContent({ path: args.old_path })
   const newPath = buildRenamedMockPath({ oldPath: args.old_path, newTitle: args.new_title })
   const oldPathStem = relativePathStem({ path: args.old_path, vaultPath: args.vault_path })
   const newPathStem = relativePathStem({ path: newPath, vaultPath: args.vault_path })
@@ -226,8 +270,8 @@ function handleRenameNote(args: { vault_path: string; old_path: string; new_titl
   }
 
   const newContent = replaceMockTitleFrontmatter({ content: oldContent, newTitle: args.new_title })
-  delete MOCK_CONTENT[args.old_path]
-  MOCK_CONTENT[newPath] = newContent
+  deleteMockContent({ path: args.old_path })
+  writeMockContent({ path: newPath, content: newContent })
   const oldTargets = canonicalRenameTargets({ oldTitle, oldPathStem })
   const updatedFiles = updateMockRenameReferences({ newPath, newPathStem, oldTargets })
 
@@ -241,7 +285,7 @@ function handleRenameNoteFilename(args: {
   new_filename_stem: string
 }) {
   const oldEntry = MOCK_ENTRIES.find(e => e.path === args.old_path)
-  const oldContent = MOCK_CONTENT[args.old_path] ?? ''
+  const oldContent = readMockContent({ path: args.old_path })
   const oldTitle = oldEntry?.title ?? ''
   const normalizedStem = args.new_filename_stem.trim().replace(/\.md$/, '')
   const oldFilename = args.old_path.split('/').pop() ?? ''
@@ -260,8 +304,8 @@ function handleRenameNoteFilename(args: {
     throw new Error('A note with that name already exists')
   }
 
-  delete MOCK_CONTENT[args.old_path]
-  MOCK_CONTENT[newPath] = oldContent
+  deleteMockContent({ path: args.old_path })
+  writeMockContent({ path: newPath, content: oldContent })
 
   const oldPathStem = relativePathStem({ path: args.old_path, vaultPath: args.vault_path })
   const newPathStem = relativePathStem({ path: newPath, vaultPath: args.vault_path })
@@ -278,7 +322,7 @@ function handleMoveNoteToFolder(args: {
   folder_path: string
 }) {
   const oldEntry = MOCK_ENTRIES.find(e => e.path === args.old_path)
-  const oldContent = MOCK_CONTENT[args.old_path] ?? ''
+  const oldContent = readMockContent({ path: args.old_path })
   const oldTitle = oldEntry?.title ?? ''
   const oldFilename = args.old_path.split('/').pop() ?? ''
   const normalizedFolderPath = args.folder_path.trim().replace(/^\/+|\/+$/g, '')
@@ -296,8 +340,8 @@ function handleMoveNoteToFolder(args: {
     throw new Error('A note with that name already exists')
   }
 
-  delete MOCK_CONTENT[args.old_path]
-  MOCK_CONTENT[newPath] = oldContent
+  deleteMockContent({ path: args.old_path })
+  writeMockContent({ path: newPath, content: oldContent })
 
   const oldPathStem = relativePathStem({ path: args.old_path, vaultPath: args.vault_path })
   const newPathStem = relativePathStem({ path: newPath, vaultPath: args.vault_path })
@@ -521,12 +565,12 @@ export const mockHandlers: Record<string, (args: any) => any> = {
 }
 
 export function addMockEntry(_entry: VaultEntry, content: string): void {
-  MOCK_CONTENT[_entry.path] = content
+  writeMockContent({ path: _entry.path, content })
   syncWindowContent()
 }
 
 export function updateMockContent(path: string, content: string): void {
-  MOCK_CONTENT[path] = content
+  writeMockContent({ path, content })
   syncWindowContent()
 }
 

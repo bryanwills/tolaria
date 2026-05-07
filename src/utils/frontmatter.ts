@@ -48,8 +48,17 @@ function parseScalar(value: FrontmatterText): FrontmatterValue {
   const lower = clean.toLowerCase()
   if (lower === 'true' || lower === 'yes') return true
   if (lower === 'false' || lower === 'no') return false
-  if (clean === value && /^-?\d+(\.\d+)?$/.test(clean)) return Number(clean)
+  if (clean === value && isNumericScalar(clean)) return Number(clean)
   return clean
+}
+
+function isNumericScalar(value: FrontmatterText): boolean {
+  if (!value) return false
+  const unsigned = value.startsWith('-') ? value.slice(1) : value
+  if (!unsigned) return false
+  const parts = unsigned.split('.')
+  return (parts.length === 1 || parts.length === 2)
+    && parts.every((part) => part.length > 0 && [...part].every((char) => char >= '0' && char <= '9'))
 }
 
 export type FrontmatterState = 'valid' | 'empty' | 'none' | 'invalid'
@@ -124,9 +133,9 @@ function assignFrontmatterValue(
 ) {
   const collisionKey = frontmatterCollisionKey(key)
   const previousKey = collisionKeys.get(collisionKey)
-  if (previousKey && previousKey !== key) delete result[previousKey]
+  if (previousKey && previousKey !== key) Reflect.deleteProperty(result, previousKey)
   collisionKeys.set(collisionKey, key)
-  result[key] = value
+  Reflect.set(result, key, value)
 }
 
 function parseFrontmatterValue(value: FrontmatterText): FrontmatterValue | undefined {

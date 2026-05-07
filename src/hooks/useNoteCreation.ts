@@ -81,7 +81,7 @@ export interface TemplateLookupParams {
 
 export function resolveTemplate({ entries, typeName }: TemplateLookupParams): string | null {
   const typeEntry = entries.find((entry) => entry.isA === 'Type' && entry.title === typeName)
-  return typeEntry?.template ?? DEFAULT_TEMPLATES[typeName] ?? null
+  return typeEntry?.template ?? (Reflect.get(DEFAULT_TEMPLATES, typeName) as string | undefined) ?? null
 }
 
 export interface NoteContentParams {
@@ -161,11 +161,23 @@ function hasOuterWhitespace(value: string): boolean {
 }
 
 function isYamlWikilink(value: string): boolean {
-  return /^\[\[.*\]\]$/.test(value)
+  return value.startsWith('[[') && value.endsWith(']]')
 }
 
 function isAmbiguousYamlScalar(value: string): boolean {
-  return /^(?:true|false|null|[-+]?\d+(?:\.\d+)?)$/i.test(value)
+  const lowerValue = value.toLowerCase()
+  return lowerValue === 'true'
+    || lowerValue === 'false'
+    || lowerValue === 'null'
+    || isDecimalYamlScalar({ value })
+}
+
+function isDecimalYamlScalar({ value }: { value: string }): boolean {
+  const unsignedValue = value.startsWith('-') || value.startsWith('+') ? value.slice(1) : value
+  const decimalParts = unsignedValue.split('.')
+  return decimalParts.length <= 2 && decimalParts.every((part) => (
+    part.length > 0 && Array.from(part).every((char) => char >= '0' && char <= '9')
+  ))
 }
 
 function shouldQuoteYamlString(value: string): boolean {

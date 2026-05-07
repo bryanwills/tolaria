@@ -10,7 +10,8 @@ async function detectVaultApiAvailability(): Promise<boolean> {
   try {
     const res = await fetch('/api/vault/ping', { signal: AbortSignal.timeout(500) })
     return res.ok
-  } catch {
+  } catch (error) {
+    void error
     return false
   }
 }
@@ -24,85 +25,171 @@ async function checkVaultApi(): Promise<boolean> {
   return available
 }
 
-interface VaultApiRequest {
-  url: string
-  method?: string
-  body?: unknown
+interface VaultApiGetRequest {
+  kind: 'all-content' | 'content' | 'entry' | 'list' | 'search'
+  params: URLSearchParams
 }
+
+interface VaultApiPostRequest {
+  body: Record<string, unknown>
+  kind: 'delete' | 'rename' | 'rename-filename' | 'save'
+}
+
+type VaultApiRequest = VaultApiGetRequest | VaultApiPostRequest
 
 /** Tracks last vault path for commands that don't receive it as an argument. */
 let lastVaultPath: string | null = null
 
-function buildVaultApiRequest(cmd: string, args?: Record<string, unknown>) {
-  if (!args) return null
-  switch (cmd) {
-    case 'list_vault':
-      if (args.path) lastVaultPath = args.path as string
-      return args.path ? { url: `/api/vault/list?path=${encodeURIComponent(args.path as string)}` } : null
-    case 'reload_vault':
-      if (args.path) lastVaultPath = args.path as string
-      return args.path ? { url: `/api/vault/list?path=${encodeURIComponent(args.path as string)}&reload=1` } : null
-    case 'reload_vault_entry':
-      return args.path ? { url: `/api/vault/entry?path=${encodeURIComponent(args.path as string)}` } : null
-    case 'get_note_content':
-    case 'validate_note_content':
-      return args.path ? { url: `/api/vault/content?path=${encodeURIComponent(args.path as string)}` } : null
-    case 'get_all_content':
-      return args.path ? { url: `/api/vault/all-content?path=${encodeURIComponent(args.path as string)}` } : null
-    case 'save_note_content':
-      return args.path ? { url: '/api/vault/save', method: 'POST', body: { path: args.path, content: args.content } } : null
-    case 'rename_note':
-      return args.old_path ? { url: '/api/vault/rename', method: 'POST', body: { vault_path: args.vault_path, old_path: args.old_path, new_title: args.new_title } } : null
-    case 'rename_note_filename':
-      return args.old_path ? {
-        url: '/api/vault/rename-filename',
-        method: 'POST',
-        body: {
-          vault_path: args.vault_path,
-          old_path: args.old_path,
-          new_filename_stem: args.new_filename_stem,
-        },
-      } : null
-    case 'move_note_to_folder':
-      return args.old_path && args.folder_path ? {
-        url: '/api/vault/move-to-folder',
-        method: 'POST',
-        body: {
-          vault_path: args.vault_path,
-          old_path: args.old_path,
-          folder_path: args.folder_path,
-        },
-      } : null
-    case 'delete_note':
-      return args.path ? { url: '/api/vault/delete', method: 'POST', body: { path: args.path } } : null
-    case 'search_vault': {
-      const q = args.query as string
-      if (!q || !lastVaultPath) return null
-      return { url: `/api/vault/search?vault_path=${encodeURIComponent(lastVaultPath)}&query=${encodeURIComponent(q)}&mode=${encodeURIComponent((args.mode as string) || 'all')}` }
-    }
-    default:
-      return null
-  }
+type PathQueryCommand =
+  | 'reload_vault_entry'
+  | 'get_note_content'
+  | 'validate_note_content'
+  | 'get_all_content'
+
+function argText(args: Record<string, unknown>, key: string): string | null {
+  const value = Reflect.get(args, key)
+  return value ? String(value) : null
 }
 
-function buildFetchOptions(request: VaultApiRequest): RequestInit {
-  if (!request.body) {
-    return { method: request.method || 'GET' }
-  }
+function buildListRequest(args: Record<string, unknown>, reload: boolean): VaultApiRequest | null {
+  const path = argText(args, 'path')
+  if (!path) return null
 
+  lastVaultPath = path
+  const params = new URLSearchParams({ path })
+  if (reload) params.set('reload', '1')
+  return { kind: 'list', params }
+}
+
+function buildPathQueryRequest(cmd: PathQueryCommand, args: Record<string, unknown>): VaultApiRequest | null {
+  const path = argText(args, 'path')
+  if (!path) return null
+  return { kind: pathQueryKind(cmd), params: new URLSearchParams({ path }) }
+}
+
+function buildRequiredPostRequest(
+  kind: VaultApiPostRequest['kind'],
+  required: unknown,
+  body: Record<string, unknown>,
+): VaultApiRequest | null {
+  return required ? { kind, body } : null
+}
+
+function buildRequiredPathPostRequest(
+  kind: VaultApiPostRequest['kind'],
+  args: Record<string, unknown>,
+  body: Record<string, unknown>,
+): VaultApiRequest | null {
+  return buildRequiredPostRequest(kind, args.path, body)
+}
+
+function buildSearchRequest(args: Record<string, unknown>): VaultApiRequest | null {
+  const query = argText(args, 'query')
+  if (!query || !lastVaultPath) return null
+
+  const mode = argText(args, 'mode') ?? 'all'
+  return { kind: 'search', params: new URLSearchParams({ mode, query, vault_path: lastVaultPath }) }
+}
+
+function isPathQueryCommand(cmd: string): cmd is PathQueryCommand {
+  return cmd === 'reload_vault_entry'
+    || cmd === 'get_note_content'
+    || cmd === 'validate_note_content'
+    || cmd === 'get_all_content'
+}
+
+function pathQueryKind(command: PathQueryCommand): VaultApiGetRequest['kind'] {
+  if (command === 'reload_vault_entry') return 'entry'
+  if (command === 'get_all_content') return 'all-content'
+  return 'content'
+}
+
+function buildPostRequest(cmd: string, args: Record<string, unknown>): VaultApiRequest | null {
+  if (cmd === 'save_note_content') {
+    return buildRequiredPathPostRequest('save', args, {
+      content: args.content,
+      path: args.path,
+    })
+  }
+  if (cmd === 'rename_note') {
+    return buildRequiredPostRequest('rename', args.old_path, {
+      new_title: args.new_title,
+      old_path: args.old_path,
+      vault_path: args.vault_path,
+    })
+  }
+  if (cmd === 'rename_note_filename') {
+    return buildRequiredPostRequest('rename-filename', args.old_path, {
+      new_filename_stem: args.new_filename_stem,
+      old_path: args.old_path,
+      vault_path: args.vault_path,
+    })
+  }
+  if (cmd === 'delete_note') return buildRequiredPathPostRequest('delete', args, { path: args.path })
+  return null
+}
+
+function buildVaultApiRequest(cmd: string, args?: Record<string, unknown>): VaultApiRequest | null {
+  if (!args) return null
+  if (cmd === 'list_vault') return buildListRequest(args, false)
+  if (cmd === 'reload_vault') return buildListRequest(args, true)
+  if (cmd === 'search_vault') return buildSearchRequest(args)
+  if (isPathQueryCommand(cmd)) return buildPathQueryRequest(cmd, args)
+  return buildPostRequest(cmd, args)
+}
+
+function buildFetchOptions(request: VaultApiPostRequest): RequestInit {
   return {
-    method: request.method || 'GET',
+    method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(request.body),
   }
 }
 
 async function fetchVaultApiResponse(request: VaultApiRequest) {
-  const url = new URL(request.url, window.location.origin)
-  if (url.origin !== window.location.origin || !url.pathname.startsWith('/api/vault/')) return undefined
-  const res = await fetch(new Request(url, buildFetchOptions(request)))
+  const res = await fetchVaultApiRequest(request)
   if (!res.ok) return undefined
   return res.json()
+}
+
+function queryString(params: URLSearchParams): string {
+  return params.toString()
+}
+
+function isGetRequest(request: VaultApiRequest): request is VaultApiGetRequest {
+  return 'params' in request
+}
+
+function fetchVaultApiGetRequest(request: VaultApiGetRequest): Promise<Response> {
+  if (request.kind === 'all-content') {
+    return fetch(`/api/vault/all-content?${queryString(request.params)}`, { method: 'GET' })
+  }
+  if (request.kind === 'content') {
+    return fetch(`/api/vault/content?${queryString(request.params)}`, { method: 'GET' })
+  }
+  if (request.kind === 'entry') {
+    return fetch(`/api/vault/entry?${queryString(request.params)}`, { method: 'GET' })
+  }
+  if (request.kind === 'list') {
+    return fetch(`/api/vault/list?${queryString(request.params)}`, { method: 'GET' })
+  }
+  if (request.kind === 'search') {
+    return fetch(`/api/vault/search?${queryString(request.params)}`, { method: 'GET' })
+  }
+  return fetch(`/api/vault/list?${queryString(request.params)}`, { method: 'GET' })
+}
+
+function fetchVaultApiPostRequest(request: VaultApiPostRequest): Promise<Response> {
+  if (request.kind === 'delete') return fetch('/api/vault/delete', buildFetchOptions(request))
+  if (request.kind === 'rename') return fetch('/api/vault/rename', buildFetchOptions(request))
+  if (request.kind === 'rename-filename') return fetch('/api/vault/rename-filename', buildFetchOptions(request))
+  return fetch('/api/vault/save', buildFetchOptions(request))
+}
+
+function fetchVaultApiRequest(request: VaultApiRequest): Promise<Response> {
+  return isGetRequest(request)
+    ? fetchVaultApiGetRequest(request)
+    : fetchVaultApiPostRequest(request)
 }
 
 export async function tryVaultApi<T>(cmd: string, args?: Record<string, unknown>): Promise<T | undefined> {
