@@ -7,6 +7,7 @@ export default defineConfig({
   description:
     "Tolaria is a local-first Markdown knowledge base with native relationships, Git history, and AI workflows.",
   base,
+  ignoreDeadLinks: [/^\/download\/?(?:index)?$/, /^\/releases\/?(?:index)?$/],
   cleanUrls: true,
   head: [
     ["link", { rel: "icon", type: "image/png", href: `${base}landing/favicon.png` }],
@@ -26,7 +27,7 @@ export default defineConfig({
       { text: "Start", link: "/start/install" },
       { text: "Concepts", link: "/concepts/vaults" },
       { text: "Guides", link: "/guides/capture-a-note" },
-      { text: "Downloads", link: "/download/" },
+      { text: "Downloads", link: "https://tolaria.md/download/", target: "_self", noIcon: true },
     ],
     search: {
       provider: "local",
