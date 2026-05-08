@@ -521,6 +521,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      pages: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -732,7 +733,12 @@ jobs:
     needs: [version, release]
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     concurrency:
       group: github-pages
       cancel-in-progress: false
@@ -755,6 +761,9 @@ jobs:
         with:
           bun-version: latest
 
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
@@ -762,14 +771,18 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          VITEPRESS_BASE="/${GITHUB_REPOSITORY#*/}/" pnpm docs:build
+          VITEPRESS_BASE="/" pnpm docs:build
           mkdir -p _site/alpha _site/stable _site/release-notes
           cp -R site/.vitepress/dist/. _site/
           if [ -d release-notes ]; then cp release-notes/*.md _site/release-notes/ 2>/dev/null || true; fi
           gh api -H "Accept: application/vnd.github.html+json" repos/${{ github.repository }}/releases --paginate > _site/releases.json
-          PAGES_URL="https://refactoringhq.github.io/${GITHUB_REPOSITORY#*/}"
+          ALPHA_TAG=$(gh release list --repo ${{ github.repository }} --exclude-drafts --limit 100 --json tagName,isPrerelease --jq '[.[] | select(.isPrerelease and (.tagName | test("^alpha-v[0-9]+\\.[0-9]+\\.[0-9]+-alpha\\.[0-9]+$")))][0].tagName // ""')
 
-          curl -fsSL "${PAGES_URL}/alpha/latest.json" -o _site/alpha/latest.json || echo '{}' > _site/alpha/latest.json
+          if [ -n "$ALPHA_TAG" ]; then
+            gh release download --repo ${{ github.repository }} "$ALPHA_TAG" --pattern "alpha-latest.json" --output _site/alpha/latest.json || echo '{}' > _site/alpha/latest.json
+          else
+            echo '{}' > _site/alpha/latest.json
+          fi
           gh release download --repo ${{ github.repository }} "${{ needs.version.outputs.tag }}" --pattern "stable-latest.json" --output _site/stable/latest.json || echo '{}' > _site/stable/latest.json
           bun scripts/build-release-download-page.ts --latest-json _site/stable/latest.json --releases-json _site/releases.json --output-file _site/stable/download/index.html
           bun scripts/build-release-history-page.ts --releases-json _site/releases.json --output-file _site/releases/index.html
@@ -779,9 +792,11 @@ jobs:
           cp _site/alpha/latest.json _site/latest.json
           cp _site/alpha/latest.json _site/latest-canary.json
 
-      - name: Deploy to GitHub Pages
-        uses: peaceiris/actions-gh-pages@e9c66a37f080288a11235e32cbe2dc5fb3a679cc
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v4
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./_site
-          commit_message: "Update release history for ${{ needs.version.outputs.tag }}"
+          path: ./_site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
