@@ -20,6 +20,7 @@ import { MantineContext, MantineProvider } from '@mantine/core'
 import { Copy } from '@phosphor-icons/react'
 import { ExternalLink } from 'lucide-react'
 import { useDocumentThemeMode } from '../hooks/useDocumentThemeMode'
+import { repairMalformedEditorBlocks } from '../hooks/editorBlockRepair'
 import { useEditorTheme } from '../hooks/useTheme'
 import { useImageDrop } from '../hooks/useImageDrop'
 import { useImageLightbox } from '../hooks/useImageLightbox'
@@ -28,7 +29,7 @@ import { isTauri } from '../mock-tauri'
 import { buildTypeEntryMap } from '../utils/typeColors'
 import { preFilterWikilinks, deduplicateByPath, MIN_QUERY_LENGTH } from '../utils/wikilinkSuggestions'
 import { filterPersonMentions, PERSON_MENTION_MIN_QUERY } from '../utils/personMentionSuggestions'
-import { attachClickHandlers, enrichSuggestionItems } from '../utils/suggestionEnrichment'
+import { attachClickHandlers, enrichSuggestionItems, hasMultipleSuggestionWorkspaces } from '../utils/suggestionEnrichment'
 import { observeNativeTextAssistanceDisabled } from '../lib/nativeTextAssistance'
 import { getRuntimeStyleNonce } from '../lib/runtimeStyleNonce'
 import { WikilinkSuggestionMenu, type WikilinkSuggestionItem } from './WikilinkSuggestionMenu'
@@ -108,10 +109,10 @@ type BlockNoteRenderRecoveryState = {
   retries: number
 }
 
-class BlockNoteRenderRecoveryBoundary extends Component<
-  { children: (recoveryKey: number) => ReactNode },
-  BlockNoteRenderRecoveryState
-> {
+class BlockNoteRenderRecoveryBoundary extends Component<{
+  children: (recoveryKey: number) => ReactNode
+  onRecover?: (attempt: number) => void
+}, BlockNoteRenderRecoveryState> {
   state: BlockNoteRenderRecoveryState = {
     error: null,
     recoveryKey: 0,
@@ -129,6 +130,7 @@ class BlockNoteRenderRecoveryBoundary extends Component<
     const attempt = this.state.retries + 1
     markRecoveredBlockNoteRenderError(error)
     trackEvent('editor_render_recovered', { reason: 'block_missing_id', attempt })
+    this.props.onRecover?.(attempt)
     this.setState(({ recoveryKey, retries }) => ({
       error: null,
       recoveryKey: recoveryKey + 1,
@@ -152,6 +154,24 @@ class BlockNoteRenderRecoveryBoundary extends Component<
   }
 }
 
+function repairEditorDocumentForRenderRecovery(editor: ReturnType<typeof useCreateBlockNote>) {
+  const current = editor.document
+  const safeBlocks = repairMalformedEditorBlocks(current)
+  if (safeBlocks === current) return
+
+  try {
+    editor.replaceBlocks(current, safeBlocks)
+  } catch (error) {
+    console.warn('[editor] Failed to repair BlockNote document before render recovery:', error)
+    try {
+      const markup = editor.blocksToHTMLLossy(safeBlocks)
+      editor._tiptapEditor.commands.setContent(markup)
+    } catch (fallbackError) {
+      console.warn('[editor] Failed to apply repaired BlockNote document fallback:', fallbackError)
+    }
+  }
+}
+
 function isEditorReadyForSuggestionAction(
   editor: ReturnType<typeof useCreateBlockNote>,
   container: HTMLElement | null,
@@ -161,7 +181,7 @@ function isEditorReadyForSuggestionAction(
   const editorElement = editor.domElement
   if (!(editorElement instanceof HTMLElement)) return true
 
-  return editorElement.isConnected && container.contains(editorElement)
+  return editorElement.isConnected
 }
 
 function runSuggestionActionSafely({
@@ -1042,6 +1062,7 @@ function buildBaseSuggestionItems(entries: VaultEntry[]) {
       title,
       aliases: [...new Set([filenameStem, ...safeStringArray(entry.aliases)])],
       group: entryType ?? 'Note',
+      entry,
       entryType,
       entryTitle: title,
       path,
@@ -1070,6 +1091,7 @@ function useSuggestionMenuItems(options: {
   insertWikilink: (target: string) => void
   locale: AppLocale
   runEditorAction: (action: SuggestionAction) => void
+  sourceEntry?: VaultEntry
   typeEntryMap: Record<string, VaultEntry>
   vaultPath?: string
 }) {
@@ -1079,6 +1101,7 @@ function useSuggestionMenuItems(options: {
     insertWikilink,
     locale,
     runEditorAction,
+    sourceEntry,
     typeEntryMap,
     vaultPath,
   } = options
@@ -1093,12 +1116,14 @@ function useSuggestionMenuItems(options: {
       ? preFilterWikilinks(baseItems, normalizedQuery)
       : filterPersonMentions(baseItems, normalizedQuery)
 
-    const items = attachClickHandlers(candidates, insertWikilink, vaultPath ?? '')
+    const items = attachClickHandlers(candidates, insertWikilink, vaultPath ?? '', sourceEntry)
     return guardSuggestionMenuItems(
-      enrichSuggestionItems(items, normalizedQuery, typeEntryMap),
+      enrichSuggestionItems(items, normalizedQuery, typeEntryMap, {
+        showWorkspace: hasMultipleSuggestionWorkspaces(baseItems),
+      }),
       runEditorAction,
     )
-  }, [baseItems, insertWikilink, runEditorAction, typeEntryMap, vaultPath])
+  }, [baseItems, insertWikilink, runEditorAction, sourceEntry, typeEntryMap, vaultPath])
 
   const getWikilinkItems = useCallback(async (query: string): Promise<WikilinkSuggestionItem[]> => (
     buildItems(query, '[[') ?? []
@@ -1240,11 +1265,12 @@ function useRichEditorPlainTextPasteTarget(options: {
 }
 
 /** Single BlockNote editor view — content is swapped via replaceBlocks */
-export function SingleEditorView({ editor, entries, onNavigateWikilink, onChange, vaultPath, editable = true, locale = 'en' }: {
+export function SingleEditorView({ editor, entries, onNavigateWikilink, onChange, sourceEntry, vaultPath, editable = true, locale = 'en' }: {
   editor: ReturnType<typeof useCreateBlockNote>
   entries: VaultEntry[]
   onNavigateWikilink: (target: string) => void
   onChange?: () => void
+  sourceEntry?: VaultEntry | null
   vaultPath?: string
   editable?: boolean
   locale?: AppLocale
@@ -1325,6 +1351,7 @@ export function SingleEditorView({ editor, entries, onNavigateWikilink, onChange
     insertWikilink,
     locale,
     runEditorAction,
+    sourceEntry: sourceEntry ?? undefined,
     typeEntryMap,
     vaultPath,
   })
@@ -1347,7 +1374,7 @@ export function SingleEditorView({ editor, entries, onNavigateWikilink, onChange
           <div className="editor__drop-overlay-label">Drop image here</div>
         </div>
       )}
-      <BlockNoteRenderRecoveryBoundary>
+      <BlockNoteRenderRecoveryBoundary onRecover={() => repairEditorDocumentForRenderRecovery(editor)}>
         {(recoveryKey) => (
           <SharedContextBlockNoteView
             key={recoveryKey}

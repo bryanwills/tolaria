@@ -17,8 +17,12 @@ interface VaultPathOptions {
 
 interface MountedVaultEntriesOptions extends VaultPathOptions {
   defaultWorkspacePath?: string | null
+  forceReload?: boolean
+  includeFallbackVault?: boolean
   vaults?: VaultOption[]
 }
+
+type MountedVaultFoldersOptions = MountedVaultEntriesOptions
 
 interface CommitWithPushOptions extends VaultPathOptions {
   message: string
@@ -59,19 +63,24 @@ function loadVaultEntriesWithCommand({ vaultPath, command }: VaultPathOptions & 
     .then((entries) => normalizeVaultEntries(entries, vaultPath))
 }
 
-function loadWorkspaceEntries(vault: VaultOption, defaultWorkspacePath?: string | null): Promise<VaultEntry[]> {
+export function loadWorkspaceEntries(
+  vault: VaultOption,
+  defaultWorkspacePath?: string | null,
+  options: { forceReload?: boolean } = {},
+): Promise<VaultEntry[]> {
   const workspace = workspaceIdentityFromVault(vault, { defaultWorkspacePath })
-  return tauriCall<unknown>({ command: isTauri() ? 'reload_vault' : 'list_vault', tauriArgs: { path: vault.path } })
+  const command = options.forceReload && isTauri() ? 'reload_vault' : 'list_vault'
+  return tauriCall<unknown>({ command, tauriArgs: { path: vault.path } })
     .then((entries) => normalizeVaultEntries(entries, vault.path, workspace))
 }
 
-function uniqueMountedVaults({ vaultPath, vaults = [] }: MountedVaultEntriesOptions): VaultOption[] {
+function uniqueMountedVaults({ vaultPath, vaults = [], includeFallbackVault = true }: MountedVaultEntriesOptions): VaultOption[] {
   const byPath = new Map<string, VaultOption>()
   for (const vault of vaults) {
     if (vault.available === false || vault.mounted === false || !vault.path.trim()) continue
     byPath.set(vault.path, vault)
   }
-  if (vaultPath.trim() && !byPath.has(vaultPath)) {
+  if (includeFallbackVault && vaultPath.trim() && !byPath.has(vaultPath)) {
     byPath.set(vaultPath, { label: vaultPath.split('/').filter(Boolean).pop() || 'Workspace', path: vaultPath, mounted: true, available: true })
   }
   return [...byPath.values()]
@@ -82,11 +91,21 @@ function loadMountedVaultEntries(options: MountedVaultEntriesOptions): Promise<V
   if (mountedVaults.length <= 1) {
     const onlyVault = mountedVaults[0]
     return onlyVault
-      ? loadWorkspaceEntries(onlyVault, options.defaultWorkspacePath)
+      ? loadWorkspaceEntries(onlyVault, options.defaultWorkspacePath, { forceReload: options.forceReload })
       : loadVaultEntries({ vaultPath: options.vaultPath })
   }
-  return Promise.all(mountedVaults.map((vault) => loadWorkspaceEntries(vault, options.defaultWorkspacePath)))
+  return Promise.all(mountedVaults.map((vault) => (
+    loadWorkspaceEntries(vault, options.defaultWorkspacePath, { forceReload: options.forceReload })
+  )))
     .then((groups) => groups.flat())
+}
+
+function attachFolderRootPath(folders: FolderNode[], rootPath: string): FolderNode[] {
+  return folders.map((folder) => ({
+    ...folder,
+    rootPath,
+    children: attachFolderRootPath(folder.children, rootPath),
+  }))
 }
 
 function loadVaultEntries({ vaultPath }: VaultPathOptions): Promise<VaultEntry[]> {
@@ -95,7 +114,7 @@ function loadVaultEntries({ vaultPath }: VaultPathOptions): Promise<VaultEntry[]
 }
 
 export function reloadVaultEntries({ vaultPath, vaults, defaultWorkspacePath }: MountedVaultEntriesOptions): Promise<VaultEntry[]> {
-  if (vaults?.length) return loadMountedVaultEntries({ vaultPath, vaults, defaultWorkspacePath })
+  if (vaults?.length) return loadMountedVaultEntries({ vaultPath, vaults, defaultWorkspacePath, forceReload: true })
   return loadVaultEntriesWithCommand({ vaultPath, command: 'reload_vault' })
 }
 
@@ -103,15 +122,50 @@ export function loadVaultFolders({ vaultPath }: VaultPathOptions): Promise<Folde
   return tauriCall<FolderNode[]>({ command: 'list_vault_folders', tauriArgs: { path: vaultPath } })
 }
 
+export async function loadMountedVaultFolders(options: MountedVaultFoldersOptions): Promise<FolderNode[]> {
+  const mountedVaults = uniqueMountedVaults({ ...options, includeFallbackVault: false })
+  if (mountedVaults.length === 0) return []
+  if (mountedVaults.length === 1) {
+    const [vault] = mountedVaults
+    if (vault.path === options.vaultPath) return loadVaultFolders({ vaultPath: vault.path })
+
+    const identity = workspaceIdentityFromVault(vault, { defaultWorkspacePath: options.defaultWorkspacePath })
+    const children = await loadVaultFolders({ vaultPath: vault.path })
+      .then((folders) => attachFolderRootPath(folders ?? [], vault.path))
+      .catch(() => [] as FolderNode[])
+    return [{
+      name: identity.label,
+      path: '',
+      rootPath: vault.path,
+      children,
+    }]
+  }
+
+  const folderGroups = await Promise.all(mountedVaults.map(async (vault) => {
+    const identity = workspaceIdentityFromVault(vault, { defaultWorkspacePath: options.defaultWorkspacePath })
+    const children = await loadVaultFolders({ vaultPath: vault.path })
+      .then((folders) => attachFolderRootPath(folders ?? [], vault.path))
+      .catch(() => [] as FolderNode[])
+    return {
+      name: identity.label,
+      path: '',
+      rootPath: vault.path,
+      children,
+    }
+  }))
+
+  return folderGroups
+}
+
 export function loadVaultViews({ vaultPath }: VaultPathOptions): Promise<ViewFile[]> {
   return tauriCall<unknown>({ command: 'list_views', tauriArgs: { vaultPath } })
     .then(normalizeViewFiles)
 }
 
-export async function loadVaultData({ vaultPath, vaults, defaultWorkspacePath }: MountedVaultEntriesOptions): Promise<LoadedVaultData> {
+export async function loadVaultData({ vaultPath, vaults, defaultWorkspacePath, forceReload }: MountedVaultEntriesOptions): Promise<LoadedVaultData> {
   if (!isTauri()) console.info('[mock] Using mock Tauri data for browser testing')
   const entries = vaults?.length
-    ? await loadMountedVaultEntries({ vaultPath, vaults, defaultWorkspacePath })
+    ? await loadMountedVaultEntries({ vaultPath, vaults, defaultWorkspacePath, forceReload })
     : await loadVaultEntries({ vaultPath })
   console.log(`Vault scan complete: ${entries.length} entries found`)
   return { entries }
