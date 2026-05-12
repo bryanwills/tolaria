@@ -31,7 +31,6 @@ import { useNoteActions } from './hooks/useNoteActions'
 import { planNewTypeCreation } from './hooks/useNoteCreation'
 import { useCommitFlow } from './hooks/useCommitFlow'
 import { useGitRepositories } from './hooks/useGitRepositories'
-import { useGitRemoteStatus } from './hooks/useGitRemoteStatus'
 import { useViewMode, type ViewMode } from './hooks/useViewMode'
 import { useEntryActions } from './hooks/useEntryActions'
 import { useAppCommands } from './hooks/useAppCommands'
@@ -80,7 +79,7 @@ import { DeleteProgressNotice } from './components/DeleteProgressNotice'
 import { UpdateBanner } from './components/UpdateBanner'
 import { invoke } from '@tauri-apps/api/core'
 import { isTauri, mockInvoke } from './mock-tauri'
-import type { SidebarSelection, InboxPeriod, VaultEntry, ViewDefinition, GitRemoteStatus, WorkspaceIdentity } from './types'
+import type { SidebarSelection, InboxPeriod, VaultEntry, ViewDefinition, WorkspaceIdentity } from './types'
 import type { NoteListItem } from './utils/ai-context'
 import { initializeNoteProperties } from './utils/initializeNoteProperties'
 import { filterEntries, filterInboxEntries, type NoteListFilter } from './utils/noteListHelpers'
@@ -119,7 +118,7 @@ import {
 import { activeGitRepositories } from './utils/gitRepositories'
 import { useVisibleWorkspaceEntries, useWorkspaceGraphState } from './hooks/useWorkspaceGraphState'
 import { useGitSetupState } from './hooks/useGitSetupState'
-import { useAppPreferences } from './hooks/useAppPreferences'
+import { AppPreferencesProvider, useAppPreferences } from './hooks/useAppPreferences'
 import { useInboxOrganizeAdvance } from './hooks/useInboxOrganizeAdvance'
 import { syncVaultAssetScope, useNoteWindowLifecycle } from './hooks/useNoteWindowLifecycle'
 import { useVaultRenameDetection } from './hooks/useVaultRenameDetection'
@@ -408,11 +407,14 @@ function App() {
     loadMcpConfigSnippet,
     copyMcpConfig,
   } = useMcpStatus(resolvedPath, setToastMessage, appLocale)
-  const gitRemoteStatus = useGitRemoteStatus(resolvedPath)
   const loadDefaultVaultModifiedFiles = vault.loadModifiedFiles
   const loadAllGitModifiedFiles = gitSurfaces.loadAllModifiedFiles
   const loadModifiedFilesForRepository = gitSurfaces.loadModifiedFilesForRepository
-  const refreshGitRemoteStatus = gitRemoteStatus.refreshRemoteStatus
+  const refreshRemoteStatusForRepository = gitSurfaces.refreshRemoteStatusForRepository
+  const refreshGitRemoteStatus = useCallback(
+    () => refreshRemoteStatusForRepository(resolvedPath),
+    [refreshRemoteStatusForRepository, resolvedPath],
+  )
   const refreshGitModifiedFiles = useCallback(async () => {
     await Promise.all([
       loadDefaultVaultModifiedFiles(),
@@ -420,17 +422,6 @@ function App() {
     ])
   }, [loadAllGitModifiedFiles, loadDefaultVaultModifiedFiles])
   const loadVaultModifiedFiles = refreshGitModifiedFiles
-  const resolveRemoteStatusForVaultPath = useCallback(async (vaultPath: string): Promise<GitRemoteStatus | null> => {
-    if (vaultPath === resolvedPath) return refreshGitRemoteStatus()
-
-    try {
-      return await (isTauri()
-        ? invoke<GitRemoteStatus>('git_remote_status', { vaultPath })
-        : mockInvoke<GitRemoteStatus>('git_remote_status', { vaultPath }))
-    } catch {
-      return null
-    }
-  }, [refreshGitRemoteStatus, resolvedPath])
 
   useEffect(() => {
     if (gitRepoState !== 'ready') return
@@ -903,8 +894,8 @@ function App() {
   const commitFlow = useCommitFlow({
     savePending: appSave.savePending,
     loadModifiedFiles: refreshGitModifiedFiles,
-    resolveRemoteStatus: gitRemoteStatus.refreshRemoteStatus,
-    resolveRemoteStatusForVaultPath,
+    loadModifiedFilesForVaultPath: loadModifiedFilesForRepository,
+    resolveRemoteStatusForVaultPath: refreshRemoteStatusForRepository,
     setToastMessage,
     onPushRejected: autoSync.handlePushRejected,
     automaticVaultPaths: activeGitRepositoryPaths,
@@ -1589,7 +1580,8 @@ function App() {
   const noteListModifiedFilesError = isChangesSelection ? gitSurfaces.changesModifiedFilesError : null
 
   return (
-    <div className="app-shell">
+    <AppPreferencesProvider dateDisplayFormat={dateDisplayFormat}>
+      <div className="app-shell">
         <div className="app">
           {sidebarVisible && (
             <>
@@ -1605,7 +1597,7 @@ function App() {
                 {effectiveSelection.kind === 'filter' && effectiveSelection.filter === 'pulse' ? (
                   <PulseView vaultPath={gitSurfaces.historyRepositoryPath} onOpenNote={handlePulseOpenNote} sidebarCollapsed={!sidebarVisible} onExpandSidebar={() => handleSetViewMode('all')} repositories={gitRepositories} selectedRepositoryPath={gitSurfaces.historyRepositoryPath} onRepositoryChange={gitSurfaces.setHistoryRepositoryPath} locale={appLocale} />
                 ) : (
-                  <NoteList entries={visibleEntries} selection={effectiveSelection} selectedNote={activeTab?.entry ?? null} loading={isVaultContentLoading} noteListFilter={noteListFilter} onNoteListFilterChange={setNoteListFilter} inboxPeriod={inboxPeriod} modifiedFiles={noteListModifiedFiles} modifiedFilesError={noteListModifiedFilesError} gitRepositories={gitRepositories} selectedGitRepositoryPath={gitSurfaces.changesRepositoryPath} onGitRepositoryChange={gitSurfaces.setChangesRepositoryPath} getNoteStatus={vault.getNoteStatus} sidebarCollapsed={!sidebarVisible} onSelectNote={notes.handleSelectNote} onReplaceActiveTab={handleReplaceActiveTabWithQueuedDiff} onEnterNeighborhood={handleEnterNeighborhood} onCreateNote={notes.handleCreateNoteImmediate} onBulkOrganize={explicitOrganizationEnabled ? bulkActions.handleBulkOrganize : undefined} onBulkArchive={bulkActions.handleBulkArchive} onBulkDeletePermanently={deleteActions.handleBulkDeletePermanently} onUpdateTypeSort={notes.handleUpdateFrontmatter} onUpdateViewDefinition={handleUpdateViewDefinition} updateEntry={vault.updateEntry} onOpenInNewWindow={handleOpenEntryInNewWindow} onDiscardFile={handleDiscardFile} onOpenDeletedNote={handleOpenDeletedNote} allNotesNoteListProperties={vaultConfig.allNotes?.noteListProperties ?? null} onUpdateAllNotesNoteListProperties={handleUpdateAllNotesNoteListProperties} inboxNoteListProperties={vaultConfig.inbox?.noteListProperties ?? null} onUpdateInboxNoteListProperties={handleUpdateInboxNoteListProperties} views={vault.views} visibleNotesRef={visibleNotesRef} allNotesFileVisibility={allNotesFileVisibility} multiSelectionCommandRef={multiSelectionCommandRef} locale={appLocale} dateDisplayFormat={dateDisplayFormat} />
+                  <NoteList entries={visibleEntries} selection={effectiveSelection} selectedNote={activeTab?.entry ?? null} loading={isVaultContentLoading} noteListFilter={noteListFilter} onNoteListFilterChange={setNoteListFilter} inboxPeriod={inboxPeriod} modifiedFiles={noteListModifiedFiles} modifiedFilesError={noteListModifiedFilesError} gitRepositories={gitRepositories} selectedGitRepositoryPath={gitSurfaces.changesRepositoryPath} onGitRepositoryChange={gitSurfaces.setChangesRepositoryPath} getNoteStatus={vault.getNoteStatus} sidebarCollapsed={!sidebarVisible} onSelectNote={notes.handleSelectNote} onReplaceActiveTab={handleReplaceActiveTabWithQueuedDiff} onEnterNeighborhood={handleEnterNeighborhood} onCreateNote={notes.handleCreateNoteImmediate} onBulkOrganize={explicitOrganizationEnabled ? bulkActions.handleBulkOrganize : undefined} onBulkArchive={bulkActions.handleBulkArchive} onBulkDeletePermanently={deleteActions.handleBulkDeletePermanently} onUpdateTypeSort={notes.handleUpdateFrontmatter} onUpdateViewDefinition={handleUpdateViewDefinition} updateEntry={vault.updateEntry} onOpenInNewWindow={handleOpenEntryInNewWindow} onDiscardFile={handleDiscardFile} onOpenDeletedNote={handleOpenDeletedNote} allNotesNoteListProperties={vaultConfig.allNotes?.noteListProperties ?? null} onUpdateAllNotesNoteListProperties={handleUpdateAllNotesNoteListProperties} inboxNoteListProperties={vaultConfig.inbox?.noteListProperties ?? null} onUpdateInboxNoteListProperties={handleUpdateInboxNoteListProperties} views={vault.views} visibleNotesRef={visibleNotesRef} allNotesFileVisibility={allNotesFileVisibility} multiSelectionCommandRef={multiSelectionCommandRef} locale={appLocale} />
                 )}
               </div>
               <ResizeHandle onResize={layout.handleNoteListResize} />
@@ -1682,7 +1674,6 @@ function App() {
               flushPendingEditorContentRef={flushPendingEditorContentRef}
               flushPendingRawContentRef={flushPendingRawContentRef}
               locale={appLocale}
-              dateDisplayFormat={dateDisplayFormat}
             />
           </div>
         </div>
@@ -1702,7 +1693,7 @@ function App() {
           locale={appLocale}
           onClose={dialogs.closeCommandPalette}
         />
-        <SearchPanel open={dialogs.showSearch} vaultPath={resolvedPath} entries={visibleEntries} onSelectNote={notes.handleSelectNote} onClose={dialogs.closeSearch} dateDisplayFormat={dateDisplayFormat} />
+        <SearchPanel open={dialogs.showSearch} vaultPath={resolvedPath} entries={visibleEntries} onSelectNote={notes.handleSelectNote} onClose={dialogs.closeSearch} />
         <CreateTypeDialog open={dialogs.showCreateTypeDialog} onClose={dialogs.closeCreateType} onCreate={handleCreateType} />
         <NoteRetargetingDialogs
           dialogState={noteRetargetingUi.dialogState}
@@ -1761,7 +1752,8 @@ function App() {
             onCancel={folderActions.cancelDeleteFolder}
           />
         )}
-    </div>
+      </div>
+    </AppPreferencesProvider>
   )
 }
 
