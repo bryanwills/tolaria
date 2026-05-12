@@ -307,18 +307,22 @@ function shouldReuseLoadedWorkspaceEntries(
   return !!loadOptions.vaults?.length && isWorkspacePathLoaded(path)
 }
 
-function resetInitialVaultLoadState(options: InitialVaultLoadEffectOptions, reuseLoadedWorkspaceEntries: boolean) {
+function shouldPreserveWorkspaceEntries(loadOptions: InitialVaultLoadSnapshot): boolean {
+  return !!loadOptions.vaults?.length
+}
+
+function resetInitialVaultLoadState(options: InitialVaultLoadEffectOptions, preserveWorkspaceEntries: boolean) {
   clearPrefetchCache()
   options.setViews([])
   resetVaultState({
     clearNewPaths: options.clearNewPaths,
     clearUnsaved: options.clearUnsaved,
-    setEntries: reuseLoadedWorkspaceEntries ? () => {} : options.setEntries,
+    setEntries: preserveWorkspaceEntries ? () => {} : options.setEntries,
     setFolders: options.setFolders,
     setIsLoading: options.setIsLoading,
     setModifiedFiles: options.setModifiedFiles,
     setModifiedFilesError: options.setModifiedFilesError,
-    setViews: reuseLoadedWorkspaceEntries ? () => {} : options.setViews,
+    setViews: preserveWorkspaceEntries ? () => {} : options.setViews,
   })
   options.resetReloading()
 }
@@ -395,7 +399,8 @@ function useInitialVaultLoad(options: InitialVaultLoadOptions) {
       vaultPath, vaults: loadOptions.vaults,
     }
     const reuseLoadedWorkspaceEntries = shouldReuseLoadedWorkspaceEntries(path, loadOptions, isWorkspacePathLoaded)
-    resetInitialVaultLoadState(effectOptions, reuseLoadedWorkspaceEntries)
+    const preserveWorkspaceEntries = reuseLoadedWorkspaceEntries || shouldPreserveWorkspaceEntries(loadOptions)
+    resetInitialVaultLoadState(effectOptions, preserveWorkspaceEntries)
 
     if (!hasVaultPath({ vaultPath: path })) return
 
@@ -439,7 +444,7 @@ function useModifiedFilesLoader(vaultPath: string, isCurrentVaultPath: (path: st
     try {
       const files = await tauriCall<ModifiedFile[]>({
         command: 'get_modified_files',
-        tauriArgs: { vaultPath: path },
+        tauriArgs: { vaultPath: path, includeStats: false },
         mockArgs: {},
       })
       if (isCurrentVaultPath(path)) setModifiedFiles(files)
@@ -931,7 +936,7 @@ function loadMissingWorkspaceEntries({
   vaultPath: string
   vaults?: VaultOption[]
 }) {
-  void loadWorkspaceEntries(vault, defaultWorkspacePath)
+  void loadWorkspaceEntries(vault, defaultWorkspacePath, { reloadIfEmpty: true })
     .then((loadedEntries) => {
       if (!isCurrentVaultPath(vaultPath)) return
       loadedPaths.add(vault.path)
