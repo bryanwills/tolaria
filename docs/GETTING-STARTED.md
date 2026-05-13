@@ -45,6 +45,20 @@ WEBKIT_DISABLE_COMPOSITING_MODE=1 WEBKIT_DISABLE_DMABUF_RENDERER=1 LD_PRELOAD=/u
 
 If your distribution stores the 64-bit library elsewhere, use that path instead, for example `/usr/lib/x86_64-linux-gnu/libwayland-client.so.0`. On 64-bit Fedora, avoid `/usr/lib/libwayland-client.so.0`; that path can point at a 32-bit library and be ignored by the loader with a wrong ELF class warning.
 
+### Linux AppImage packaging checks
+
+Linux release CI prepares Tauri's AppImage tools cache before `pnpm tauri build`:
+
+```bash
+node scripts/appimage-launcher-tools.mjs prepare-plugin
+```
+
+That step patches linuxdeploy's generated GTK `AppRun` wrapper before the AppImage is sealed so direct launches, absolute symlinks, and relative symlinks resolve the real AppRun path before choosing its directory. After build, CI extracts every produced AppImage launcher and verifies the symlink-safe resolver:
+
+```bash
+node scripts/appimage-launcher-tools.mjs validate-appimages src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage
+```
+
 ## Quick Start
 
 ```bash
@@ -69,7 +83,7 @@ pnpm playwright:regression  # Full Playwright regression suite
 
 `create_getting_started_vault` clones the public starter repo and then removes every git remote from the new local copy. That means Getting Started vaults open local-only by default. Users connect a compatible remote later through the bottom-bar `No remote` chip or the command palette, both of which feed the same `AddRemoteModal` and `git_add_remote` backend flow.
 
-Linux AppImage builds still use the user's system `git`. Before Tolaria spawns that `git` process, it removes AppImage loader overrides such as `LD_LIBRARY_PATH`, `LD_PRELOAD`, and `GIT_EXEC_PATH` so HTTPS clone helpers use the host git libraries instead of bundled AppImage libraries.
+Linux AppImage builds still use the user's system `git` and `node`. Before Tolaria spawns those Git or MCP Node subprocesses, it removes AppImage loader overrides such as `LD_LIBRARY_PATH`, `LD_PRELOAD`, and `GIT_EXEC_PATH` so HTTPS clone helpers and MCP tooling use the host library stack instead of bundled AppImage libraries.
 
 ## Multiple Vaults At The Same Time
 
