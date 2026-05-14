@@ -135,7 +135,7 @@ The note list opportunistically preloads visible and adjacent markdown/text entr
 | Raw editor | CodeMirror 6 | - |
 | Styling | Tailwind CSS v4 + CSS variables | 4.1.18 |
 | UI primitives | Radix UI + shadcn/ui | - |
-| Icons | Phosphor Icons + Lucide | - |
+| Icons | Phosphor Icons | - |
 | Build | Vite | 7.3.1 |
 | Backend language | Rust (edition 2021) | 1.77.2 |
 | Frontmatter parsing | gray_matter | 0.2 |
@@ -227,14 +227,14 @@ flowchart TD
 
 Panels are separated by `ResizeHandle` components that support drag-to-resize. `useLayoutPanels` clamps the sidebar, note-list, and inspector widths before applying them, keeps the side panes from flex-shrinking below their protected widths, and persists the last chosen widths in installation-local localStorage under `tolaria:layout-panels`.
 
-The main Tauri window derives its minimum width from the visible panes instead of a single fixed floor. `useMainWindowSizeConstraints` treats the editor-only shell as the 480px baseline, adds the current sidebar / note-list / expanded-inspector widths on top with minimum floors, and calls the native `update_current_window_min_size` command whenever view mode, inspector visibility, or restored pane widths change. That same native command can grow the current window back out when a wider pane combination is restored, but Windows keeps grow-to-fit disabled so opening or closing the Properties panel does not unmaximize or reposition the main window. Note windows skip this path and keep their dedicated 800×700 initial sizing.
+The main Tauri window derives its minimum width from the visible panes instead of a single fixed floor. `useMainWindowSizeConstraints` treats the editor-only shell as the 480px baseline, adds the current sidebar / note-list / expanded-inspector widths on top with minimum floors, and calls the native `update_current_window_min_size` command whenever view mode, inspector visibility, or restored pane widths change. That same native command can grow the current window back out when a wider pane combination is restored, but Windows keeps grow-to-fit disabled and skips min-size mutation while fullscreen or maximized so navigation/sidebar interactions do not unfullscreen or reposition the main window. Note windows skip this path and keep their dedicated 800×700 initial sizing.
 
 The main Tauri window also persists its last normal size and screen position in the app config directory as `window-state.json`. The state stores logical window points, while `window_state.rs` migrates older physical-pixel state on read so Retina and non-Retina launches restore the same user-facing bounds. On startup, the restored frame applies only to the main window and clamps to the currently available monitor work areas, so stale coordinates from a disconnected display fall back to a visible placement. Maximized, fullscreen, minimized, and detached note-window frames are not written as the restore baseline.
 
 Tauri setup keeps launch-time filesystem and subprocess work off the window creation critical path. Legacy `~/Laputa` housekeeping and the initial persisted-vault MCP bridge sync run on named background threads, so large legacy vaults, stale active-vault paths, or slow process startup cannot beachball the macOS app before React mounts. React still resyncs the bridge from `useVaultSwitcher` after the persisted selection loads, and no selected vault stops the bridge. The HTML bootstrap also installs a Tauri-only one-shot watchdog: React reports readiness from an effect after the root commits, and if that readiness signal never arrives the WebView reloads once instead of leaving macOS users in an inert rendered shell.
 
 Linux uses custom React-rendered window chrome instead of the native Tauri menu bar. `setup_linux_window_chrome()` drops server-side decorations on the main window, `openNoteInNewWindow()` does the same for detached note windows, and `LinuxTitlebar`/`LinuxMenuButton` route both window controls and menu actions back through the same shared command pipeline that the desktop native menus use. The native app menu keeps macOS-only Services/Hide entries off Windows and Linux, registers the macOS Window submenu with Tauri's reserved `WINDOW_SUBMENU_ID` so NSApp can add system window-management and window-list items, registers a window-scoped menu event handler on Windows where Tauri delivers menu clicks through the main `WebviewWindow`, and cross-platform custom items such as Check for Updates emit Tolaria command IDs with visible updater feedback.
-When Tolaria is launched from a Linux AppImage, `run()` also applies AppImage-only WebKitGTK startup safeguards without changing native package installs. It injects `WEBKIT_DISABLE_DMABUF_RENDERER=1` and `WEBKIT_DISABLE_COMPOSITING_MODE=1` independently unless the user already set either variable, and on Wayland sessions it re-execs once with the first architecture-matching system `libwayland-client.so` in `LD_PRELOAD` when the user has not provided their own preload. The candidate order prefers Fedora-style `lib64` and Debian-style `x86_64-linux-gnu` paths before generic `/usr/lib`, and the ELF header is checked so a 64-bit Tolaria process does not retry with a 32-bit Wayland client library. Linux release jobs install `fcitx5-frontend-gtk3`, the AppImage output-plugin shim copies the GTK3 fcitx immodule and client library into the AppDir before sealing, and runtime startup writes a mount-path-specific `GTK_IM_MODULE_FILE` cache when fcitx is configured via `GTK_IM_MODULE=fcitx` or common fcitx environment hints. If the user has not already chosen `GTK_IM_MODULE`, Tolaria sets `GTK_IM_MODULE=fcitx` before WebKit starts, so both Wayland and X11 AppImage launches can load the bundled module instead of depending on host GTK module caches. The same AppImage path checks whether `fc-match` resolves the default emoji font to `Noto-COLRv1.ttf`; when the user has not provided `FONTCONFIG_FILE` or `FONTCONFIG_PATH`, Tolaria writes a cache-local fontconfig file that rejects only that matched font file and exports it before WebKit starts. The rendering overrides keep AppImage WebViews from blanking after accelerated compositing/DMA-BUF failures, the re-exec addresses AppImage library-order failures that can surface as `Could not create default EGL display: EGL_BAD_PARAMETER`, the fcitx GTK bundle preserves Chinese/Japanese/Korean IME composition for affected AppImage users, and the fontconfig guard avoids known WebKit crashes in COLRv1 emoji font rendering while leaving other emoji fonts available.
+On Linux, `run()` applies WebKitGTK startup safeguards before Tauri creates the webview. Native Wayland launches and AppImage launches inject `WEBKIT_DISABLE_DMABUF_RENDERER=1` and `WEBKIT_DISABLE_COMPOSITING_MODE=1` independently unless the user already set either variable, covering compositor-specific WebKit crashes without changing native X11 launches. AppImage launches keep the additional AppImage-only safeguards: on Wayland sessions Tolaria re-execs once with the first architecture-matching system `libwayland-client.so` in `LD_PRELOAD` when the user has not provided their own preload. The candidate order prefers Fedora-style `lib64` and Debian-style `x86_64-linux-gnu` paths before generic `/usr/lib`, and the ELF header is checked so a 64-bit Tolaria process does not retry with a 32-bit Wayland client library. Linux release jobs install `fcitx5-frontend-gtk3`, the AppImage output-plugin shim copies the GTK3 fcitx immodule and client library into the AppDir before sealing, and runtime startup writes a mount-path-specific `GTK_IM_MODULE_FILE` cache when fcitx is configured via `GTK_IM_MODULE=fcitx` or common fcitx environment hints. If the user has not already chosen `GTK_IM_MODULE`, Tolaria sets `GTK_IM_MODULE=fcitx` before WebKit starts, so both Wayland and X11 AppImage launches can load the bundled module instead of depending on host GTK module caches. The same AppImage path checks whether `fc-match` resolves the default emoji font to `Noto-COLRv1.ttf`; when the user has not provided `FONTCONFIG_FILE` or `FONTCONFIG_PATH`, Tolaria writes a cache-local fontconfig file that rejects only that matched font file and exports it before WebKit starts. The rendering overrides keep WebViews from blanking or crashing after accelerated compositing/DMA-BUF failures, the re-exec addresses AppImage library-order failures that can surface as `Could not create default EGL display: EGL_BAD_PARAMETER`, the fcitx GTK bundle preserves Chinese/Japanese/Korean IME composition for affected AppImage users, and the fontconfig guard avoids known WebKit crashes in COLRv1 emoji font rendering while leaving other emoji fonts available.
 
 ## Multi-Window (Note Windows)
 
@@ -341,7 +341,7 @@ Each CLI agent authenticates itself outside Tolaria. Claude Code uses its existi
 
 The MCP server (`mcp-server/`) exposes vault operations as tools for AI assistants (Claude Code, Gemini CLI, Cursor, or any MCP-compatible client).
 
-### Tool Surface (14 tools)
+### Tool Surface
 
 | Tool | Params | Description |
 |------|--------|-------------|
@@ -349,12 +349,13 @@ The MCP server (`mcp-server/`) exposes vault operations as tools for AI assistan
 | `read_note` | `path` | Read note content (alias for `open_note`) |
 | `create_note` | `path, title, [type]` | Create new note with title and optional type frontmatter |
 | `search_notes` | `query, [limit]` | Search notes by title or content substring |
+| `list_vaults` | — | List active mounted vaults and whether each has root `AGENTS.md` instructions |
 | `append_to_note` | `path, text` | Append text to end of existing note |
 | `edit_note_frontmatter` | `path, patch` | Merge key-value patch into YAML frontmatter |
 | `delete_note` | `path` | Delete a note file from the vault |
 | `link_notes` | `source_path, property, target_title` | Add a target to an array property in frontmatter |
 | `list_notes` | `[type_filter], [sort]` | List all notes, optionally filtered by type |
-| `vault_context` | — | Get vault summary: entity types + 20 recent notes + configFiles |
+| `vault_context` / `get_vault_context` | `[vaultPath]` | Get mounted-vault summary: entity types, folders, recent notes, and root `AGENTS.md` instructions |
 | `ui_open_note` | `path` | Open a note in the Tolaria UI editor |
 | `ui_open_tab` | `path` | Open a note in a new UI tab |
 | `ui_highlight` | `element, [path]` | Highlight a UI element (editor, tab, properties, notelist) |
@@ -374,27 +375,28 @@ Tolaria can register itself as an MCP server in:
 - `~/.gemini/settings.json` (Gemini CLI)
 - `~/.cursor/mcp.json` (Cursor)
 - `~/.config/mcp/mcp.json` (generic MCP-compatible clients)
+- `~/.config/opencode/opencode.json` (OpenCode, using its `mcp` config key)
 
-That setup is user-initiated through the status bar / command palette flow, not a startup side effect. Registration is non-destructive (additive, preserves other servers and Gemini settings), uses `upsert` semantics, and can be reversed by removing Tolaria's entry again. Tolaria verifies Node.js is available before writing config, writes an explicit `type: "stdio"` entry, pins `VAULT_PATH` to the active vault, and sets `WS_UI_PORT=9711` so UI actions route back to the desktop app. The same generated entry is exposed as a manual JSON snippet in the MCP setup dialog and through the AI panel copy action, giving users a transparent fallback for MCP-compatible tools Tolaria does not auto-configure. In the desktop app, `useMcpStatus` copies that snippet through the native `copy_text_to_clipboard` command instead of the Web Clipboard API so macOS WKWebView permission policy cannot block setup. Packaged builds resolve `mcp-server/` from the installed resource directory next to the executable before falling back to macOS `Resources`, Linux package roots such as `/usr/local/Tolaria`, `/usr/lib/tolaria`, and `/usr/lib/tolaria/resources`, and AppImage paths. The `useMcpStatus` hook tracks whether the active vault is explicitly connected (`checking | installed | not_installed`) and owns connect, disconnect, exact-snippet load, and copy-to-clipboard actions. Gemini CLI still owns its own install and sign-in; Tolaria writes the durable external MCP entry only on explicit setup, while app-managed Gemini sessions use transient settings and optional vault guidance. The desktop WebSocket bridge is started only when a persisted active vault exists and is resynced from React state on vault changes; no selected vault stops the bridge instead of falling back to `~/Laputa`. Stdio MCP server processes are owned by the external client that launched them: when that client closes stdin, Tolaria cancels UI-bridge reconnect timers, closes any UI WebSocket, and exits the Node process instead of keeping it alive in the background.
+That setup is user-initiated through the status bar / command palette flow, not a startup side effect. Registration is non-destructive (additive, preserves other servers and Gemini/OpenCode settings), uses `upsert` semantics, and can be reversed by removing Tolaria's entry again. Tolaria verifies Node.js is available before writing config, writes a vault-neutral `type: "stdio"` entry for standard MCP clients, writes OpenCode's vault-neutral `type: "local"` entry, and sets `WS_UI_PORT=9711` so UI actions route back to the desktop app. Durable external MCP processes resolve active workspaces at tool-call time: explicit `VAULT_PATH`/`VAULT_PATHS` env still wins for app-owned and legacy launches, otherwise the Node server reads Tolaria's `vaults.json`, uses `active_vault` first, and includes every workspace not marked `mounted: false`. Vault context checks each active workspace root for `AGENTS.md` and includes those instructions in the returned context. The same generated entry is exposed as a manual JSON snippet in the MCP setup dialog and through the AI panel copy action, giving users a transparent fallback for MCP-compatible tools Tolaria does not auto-configure. In the desktop app, `useMcpStatus` copies that snippet through the native `copy_text_to_clipboard` command instead of the Web Clipboard API so macOS WKWebView permission policy cannot block setup. Packaged builds resolve `mcp-server/` from the installed resource directory next to the executable before falling back to macOS `Resources`, Linux package roots such as `/usr/local/Tolaria`, `/usr/lib/tolaria`, and `/usr/lib/tolaria/resources`, and AppImage paths. Linux AppImage startup extracts the bundled `mcp-server/` to `~/.local/share/tolaria/mcp-server/` with a `.tolaria-version` marker, so durable external registrations use a stable path instead of the changing AppImage mount point. The `useMcpStatus` hook tracks whether Tolaria's durable MCP entry is connected (`checking | installed | not_installed`) and owns connect, disconnect, exact-snippet load, and copy-to-clipboard actions. Gemini CLI still owns its own install and sign-in; Tolaria writes the durable external MCP entry only on explicit setup, while app-managed Gemini sessions use transient settings and optional vault guidance. The desktop WebSocket bridge is started only when a persisted active vault exists and is resynced from React state on vault changes; no selected vault stops the bridge instead of falling back to `~/Laputa`. Stdio MCP server processes are owned by the external client that launched them: when that client closes stdin, Tolaria cancels UI-bridge reconnect timers, closes any UI WebSocket, and exits the Node process instead of keeping it alive in the background.
 
 ### Architecture
 
 ```mermaid
 flowchart TD
-    subgraph MCP["MCP Server (Node.js) — selected-vault scoped"]
+    subgraph MCP["MCP Server (Node.js) — mounted-workspace scoped"]
         IDX["index.js"]
         VAULT["vault.js\n(findMarkdownFiles, readNote, createNote,\nsearchNotes, appendToNote, editNoteFrontmatter,\ndeleteNote, linkNotes, listNotes, vaultContext)"]
         WSB["ws-bridge.js"]
 
-        IDX -->|"stdio transport"| STDIO["Claude Code / Cursor"]
+        IDX -->|"stdio transport"| STDIO["Claude Code / Cursor / Gemini / OpenCode"]
         IDX --> VAULT
         IDX --> WSB
         WSB -->|"port 9710 — tool bridge"| AI["AI Clients\n(Claude Code, external)"]
         WSB -->|"port 9711 — UI bridge"| FE["Frontend\n(useAiActivity)"]
     end
 
-    TAURI["Tauri bridge lifecycle"] -->|"start/stop/restart with active VAULT_PATH"| MCP
-    UI["Status bar / Command Palette"] -->|"explicit setup or disconnect"| CFG["~/.claude.json\n~/.claude/mcp.json\n~/.cursor/mcp.json\n~/.config/mcp/mcp.json"]
+    TAURI["Tauri bridge lifecycle"] -->|"start/stop/restart with VAULT_PATHS"| MCP
+    UI["Status bar / Command Palette"] -->|"explicit setup or disconnect"| CFG["~/.claude.json\n~/.claude/mcp.json\n~/.cursor/mcp.json\n~/.config/mcp/mcp.json\n~/.config/opencode/opencode.json"]
 ```
 
 ### WebSocket Bridge
@@ -420,11 +422,12 @@ flowchart LR
 
 | Function | Purpose |
 |----------|---------|
-| `spawn_ws_bridge(vault_path)` | Spawns `ws-bridge.js` as child process with VAULT_PATH env |
+| `spawn_ws_bridge(vault_path)` | Spawns `ws-bridge.js` as child process with `VAULT_PATH`/`VAULT_PATHS` env |
 | `sync_mcp_bridge_vault(vault_path?)` | Starts, restarts, or stops the desktop WebSocket bridge as the selected vault changes |
-| `register_mcp(vault_path)` | Verifies Node.js, resolves the packaged `mcp-server/`, and writes Tolaria's explicit stdio entry to Claude Code, Gemini CLI, Cursor, and generic MCP configs on user request |
-| `mcp_config_snippet(vault_path)` | Builds the exact `mcpServers.tolaria` JSON users can copy into any compatible client without writing third-party config files |
-| `remove_mcp()` | Removes Tolaria's MCP entry from Claude Code, Gemini CLI, Cursor, and generic MCP configs |
+| `extract_mcp_server_to_stable_dir(app_version)` | On Linux AppImage launches, copies bundled MCP files to `~/.local/share/tolaria/mcp-server/` with version-gated replacement so external clients can keep a stable `index.js` path |
+| `register_mcp(vault_path)` | Verifies Node.js, resolves the packaged or stable extracted `mcp-server/`, and writes Tolaria's vault-neutral entry to Claude Code, Gemini CLI, Cursor, OpenCode, and generic MCP configs on user request |
+| `mcp_config_snippet(vault_path)` | Builds the exact vault-neutral `mcpServers.tolaria` JSON users can copy into any compatible client without writing third-party config files |
+| `remove_mcp()` | Removes Tolaria's MCP entry from Claude Code, Gemini CLI, Cursor, OpenCode, and generic MCP configs |
 | `upsert_mcp_config(path, entry)` | Atomic config file update (create/merge, preserves others) |
 
 The `WsBridgeChild` state wrapper in `lib.rs` ensures the bridge process is replaced on vault switches, stopped when no active vault is selected, and killed plus waited on app exit via the `RunEvent::Exit` handler. The same desktop layer keeps Tauri asset protocol access limited to vault roots loaded during the current app session; command calls remain active-vault scoped for reads, writes, and external opens.
@@ -573,7 +576,7 @@ sequenceDiagram
     participant MCP as MCP Server
     participant U as User
 
-    T->>T: apply Linux AppImage WebKit env/preload safeguards<br/>(AppImage only)
+    T->>T: apply Linux WebKit env safeguards<br/>(Wayland/AppImage)
     T->>T: start background legacy vault housekeeping<br/>(does not block setup)
     T->>MCP: start background initial ws-bridge sync<br/>(if active vault exists)
     T->>A: App mounts
@@ -788,9 +791,9 @@ The vault backend (`src-tauri/src/vault/`) is split into focused submodules:
 | `get_ai_agents_status` | Check Claude Code + Codex + OpenCode + Pi + Gemini availability |
 | `get_agent_docs_path` | Resolve the bundled local Tolaria docs folder used in AI-agent system prompts |
 | `stream_ai_agent` | Stream Claude Code, Codex, OpenCode, Pi, or Gemini through the normalized agent event layer |
-| `register_mcp_tools` | Register MCP in Claude/Gemini/Cursor/generic config for the active vault |
-| `remove_mcp_tools` | Remove Tolaria's MCP entry from Claude/Gemini/Cursor/generic config |
-| `check_mcp_status` | Check whether the active vault is explicitly registered in Claude/Gemini/Cursor/generic config |
+| `register_mcp_tools` | Register vault-neutral MCP in Claude/Gemini/Cursor/OpenCode/generic config |
+| `remove_mcp_tools` | Remove Tolaria's MCP entry from Claude/Gemini/Cursor/OpenCode/generic config |
+| `check_mcp_status` | Check whether Tolaria's durable MCP entry is registered in Claude/Gemini/Cursor/OpenCode/generic config |
 | `get_mcp_config_snippet` | Return the exact manual MCP JSON snippet for the active vault |
 | `copy_text_to_clipboard` | Copy setup snippets through the native desktop clipboard command path |
 | `read_text_from_clipboard` | Read current desktop clipboard text for command-driven plain-text paste |
