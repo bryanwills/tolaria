@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { VaultEntry } from '../types'
-import { refreshPulledVaultState } from './pulledVaultRefresh'
+import { getPulledVaultUpdateOptions, refreshPulledVaultState } from './pulledVaultRefresh'
 
 function makeEntry(path: string, title = 'Test note'): VaultEntry {
   return {
@@ -30,6 +30,10 @@ function makeOptions(overrides: Partial<Parameters<typeof refreshPulledVaultStat
 }
 
 describe('refreshPulledVaultState', () => {
+  it('marks pull-originated vault updates as focused-editor preserving', () => {
+    expect(getPulledVaultUpdateOptions()).toEqual({ preserveFocusedEditor: true })
+  })
+
   it('reloads vault-derived data and refreshes the active note when pull updated it', async () => {
     const options = makeOptions()
 
@@ -101,6 +105,22 @@ describe('refreshPulledVaultState', () => {
     expect(options.reloadViews).toHaveBeenCalledOnce()
     expect(options.replaceActiveTab).not.toHaveBeenCalled()
     expect(options.closeAllTabs).not.toHaveBeenCalled()
+  })
+
+  it('retargets a focused active tab when the active note was moved externally', async () => {
+    const movedEntry = makeEntry('/vault/projects/active.md', 'Active')
+    const options = makeOptions({
+      activeTabPath: '/vault/active.md',
+      reloadVault: vi.fn().mockResolvedValue([movedEntry]),
+      shouldKeepActiveEditorMounted: vi.fn(() => true),
+      updatedFiles: ['active.md', 'projects/active.md'],
+    })
+
+    await refreshPulledVaultState(options)
+
+    expect(options.shouldKeepActiveEditorMounted).not.toHaveBeenCalled()
+    expect(options.closeAllTabs).toHaveBeenCalledOnce()
+    expect(options.replaceActiveTab).toHaveBeenCalledWith(movedEntry)
   })
 
   it('skips stale tab replacement when the active note changes during reload', async () => {
