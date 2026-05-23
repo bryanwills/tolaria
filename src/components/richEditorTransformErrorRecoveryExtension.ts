@@ -35,7 +35,12 @@ interface RepairableBlockNoteEditor {
   replaceBlocks?: (currentBlocks: unknown[], nextBlocks: unknown[]) => unknown
 }
 
-type RecoveryReason = 'mismatched_transaction' | 'stale_transaction' | 'transform_error'
+type RecoveryReason =
+  | 'invalid_insertion_depth'
+  | 'mismatched_transaction'
+  | 'stale_transaction'
+  | 'table_position_out_of_range'
+  | 'transform_error'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
@@ -67,12 +72,26 @@ function isInvalidContentTransactionError(error: unknown): boolean {
   return error instanceof RangeError && error.message.startsWith('Invalid content for node ')
 }
 
+function isInvalidInsertionDepthError(error: unknown): boolean {
+  return error instanceof RangeError && error.message.includes('Inserted content deeper than insertion position')
+}
+
+function isTablePositionOutOfRangeError(error: unknown): boolean {
+  return error instanceof RangeError && /^Index \d+ out of range for <tableRow\(/.test(error.message)
+}
+
+function isTransformError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'TransformError'
+}
+
+function isRecoverableRangeError(error: unknown): boolean {
+  return isInvalidContentTransactionError(error)
+    || isInvalidInsertionDepthError(error)
+    || isTablePositionOutOfRangeError(error)
+}
+
 export function isRecoverableEditorTransformError(error: unknown): boolean {
-  return error instanceof Error && (
-    error.name === 'TransformError'
-    || isMismatchedTransactionError(error)
-    || isInvalidContentTransactionError(error)
-  )
+  return isTransformError(error) || isMismatchedTransactionError(error) || isRecoverableRangeError(error)
 }
 
 function recoveryReason(
@@ -82,7 +101,13 @@ function recoveryReason(
 ): RecoveryReason {
   if (transactionDocIsStale(transaction, view)) return 'stale_transaction'
   if (isMismatchedTransactionError(error)) return 'mismatched_transaction'
+  if (isInvalidInsertionDepthError(error)) return 'invalid_insertion_depth'
+  if (isTablePositionOutOfRangeError(error)) return 'table_position_out_of_range'
   return 'transform_error'
+}
+
+function shouldRepairEditorDocument(error: unknown): boolean {
+  return isRecoverableRangeError(error)
 }
 
 export function reportRecoveredEditorTransformError(reason: RecoveryReason, error: unknown): void {
@@ -132,7 +157,7 @@ function createRecoveringDispatch(
     } catch (error) {
       if (!isRecoverableEditorTransformError(error)) throw error
 
-      if (isInvalidContentTransactionError(error)) {
+      if (shouldRepairEditorDocument(error)) {
         activeRecoverDocument(recoveryState)?.()
       }
       reportRecoveredEditorTransformError(recoveryReason(error, transaction, view), error)

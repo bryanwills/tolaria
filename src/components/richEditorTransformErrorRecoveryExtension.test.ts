@@ -32,6 +32,19 @@ function createView(error?: Error) {
   return { currentDoc, dispatch, view }
 }
 
+function expectDocumentRepairRecovery(error: Error, reason: string) {
+  const { currentDoc, view } = createView(error)
+  const recoverDocument = vi.fn()
+
+  installRichEditorTransformErrorRecovery(view, { recoverDocument })
+
+  expect(() => view.dispatch({ before: currentDoc })).not.toThrow()
+  expect(recoverDocument).toHaveBeenCalledTimes(1)
+  expect(trackEvent).toHaveBeenCalledWith('rich_editor_transform_error_recovered', {
+    reason,
+  })
+}
+
 beforeEach(() => {
   vi.spyOn(console, 'warn').mockImplementation(() => {})
 })
@@ -48,6 +61,15 @@ describe('isRecoverableEditorTransformError', () => {
     expect(isRecoverableEditorTransformError(new RangeError(
       'Invalid content for node blockContainer: <paragraph("Procedures are long-running"), blockGroup(blockContainer(bulletListItem("Step")))>',
     ))).toBe(true)
+    expect(isRecoverableEditorTransformError(new RangeError(
+      'Inserted content deeper than insertion position',
+    ))).toBe(true)
+    expect(isRecoverableEditorTransformError(new RangeError(
+      'Index 1 out of range for <tableRow(tableCell(tableParagraph("A")))>',
+    ))).toBe(true)
+    expect(isRecoverableEditorTransformError(new RangeError(
+      'Index 1 out of range for <paragraph("A")>',
+    ))).toBe(false)
     expect(isRecoverableEditorTransformError(new Error('unrelated'))).toBe(false)
   })
 })
@@ -78,19 +100,26 @@ describe('installRichEditorTransformErrorRecovery', () => {
   })
 
   it('recovers invalid-content schema transactions from mixed paragraph and list editing', () => {
-    const schemaError = new RangeError(
-      'Invalid content for node blockContainer: <paragraph("Procedures are long-running"), blockGroup(blockContainer(bulletListItem("Step")))>',
+    expectDocumentRepairRecovery(
+      new RangeError(
+        'Invalid content for node blockContainer: <paragraph("Procedures are long-running"), blockGroup(blockContainer(bulletListItem("Step")))>',
+      ),
+      'transform_error',
     )
-    const { currentDoc, view } = createView(schemaError)
-    const recoverDocument = vi.fn()
+  })
 
-    installRichEditorTransformErrorRecovery(view, { recoverDocument })
+  it('recovers table selection transactions whose target row changed underneath BlockNote', () => {
+    expectDocumentRepairRecovery(
+      new RangeError('Index 1 out of range for <tableRow(tableCell(tableParagraph("A")))>'),
+      'table_position_out_of_range',
+    )
+  })
 
-    expect(() => view.dispatch({ before: currentDoc })).not.toThrow()
-    expect(recoverDocument).toHaveBeenCalledTimes(1)
-    expect(trackEvent).toHaveBeenCalledWith('rich_editor_transform_error_recovered', {
-      reason: 'transform_error',
-    })
+  it('recovers invalid insertion-depth transactions after note switching and saves', () => {
+    expectDocumentRepairRecovery(
+      new RangeError('Inserted content deeper than insertion position'),
+      'invalid_insertion_depth',
+    )
   })
 
   it('keeps non-ProseMirror dispatch failures visible', () => {
